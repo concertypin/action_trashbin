@@ -1,0 +1,82 @@
+name: Build Passkeyize browser artifact
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Chrome development extension
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      BROWSER: chrome
+      MANIFEST_VERSION: "3"
+      NODE_ENV: development
+      NODE_OPTIONS: --max-old-space-size=4608
+      npm_config_node_options: --max-old-space-size=4608
+    steps:
+      - name: Check out build harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Check out Bitwarden source base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bitwarden/clients
+          ref: b3cedf86adfaed4388ef15b8d92cf8a7cfc7eefa
+          path: clients
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Apply passkey profile changes
+        working-directory: clients
+        run: git apply --whitespace=nowarn ../harness/clients.patch
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: clients/.nvmrc
+
+      - name: Set up pnpm
+        working-directory: clients
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.3.4 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        working-directory: clients
+        run: pnpm install --frozen-lockfile
+
+      - name: Link workspace packages for webpack aliases
+        working-directory: clients
+        run: |
+          while IFS= read -r -d '' manifest; do
+            package_name=$(jq -r '.name // empty' "$manifest")
+            case "$package_name" in
+              @bitwarden/*)
+                package_path=${manifest%/package.json}
+                package_link="node_modules/$package_name"
+                mkdir -p "$(dirname "$package_link")"
+                rm -rf "$package_link"
+                ln -s "$GITHUB_WORKSPACE/clients/$package_path" "$package_link"
+                ;;
+            esac
+          done < <(find apps libs -name node_modules -prune -o -name package.json -print0)
+
+      - name: Build Chrome development extension
+        working-directory: clients
+        run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/chrome-dev
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: passkey-profile-chrome-dev
+          path: clients/dist/apps/browser/chrome-dev/
+          if-no-files-found: error
+          retention-days: 7
