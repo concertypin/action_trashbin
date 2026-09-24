@@ -1,4 +1,4 @@
-name: Build Passkeyize browser artifact
+name: Build Firefox personal-use artifact
 
 on:
   workflow_dispatch:
@@ -8,13 +8,13 @@ permissions:
 
 jobs:
   build:
-    name: Build Chrome development extension
+    name: Build Firefox production extension
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
-      BROWSER: chrome
+      BROWSER: firefox
       MANIFEST_VERSION: "3"
-      NODE_ENV: development
+      NODE_ENV: production
       NODE_OPTIONS: --max-old-space-size=4608
       npm_config_node_options: --max-old-space-size=4608
     steps:
@@ -69,14 +69,14 @@ jobs:
             esac
           done < <(find apps libs -name node_modules -prune -o -name package.json -print0)
 
-      - name: Build Chrome development extension
+      - name: Build Firefox production extension
         working-directory: clients
-        run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/chrome-dev
+        run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/firefox
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: passkey-profile-chrome-dev
-          path: clients/dist/apps/browser/chrome-dev/
+          name: passkey-profile-firefox-personal
+          path: clients/dist/apps/browser/firefox/
           if-no-files-found: error
           retention-days: 7
