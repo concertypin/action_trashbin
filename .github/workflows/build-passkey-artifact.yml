@@ -21,6 +21,9 @@ jobs:
           - mode: packed-untrusted-x5c
             display_name: Bitwarden Passkeyize (Packed Attestation)
             version: 2026.9.26.2
+          - mode: packed-known-security-key-aaguid-untrusted-x5c
+            display_name: Bitwarden Passkeyize (Known Security Key AAGUID)
+            version: 2026.9.26.3
     env:
       BROWSER: firefox
       BW_ROAMING_ATTESTATION_MODE: ${{ matrix.mode }}
