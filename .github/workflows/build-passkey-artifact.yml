@@ -8,11 +8,18 @@ permissions:
 
 jobs:
   build:
-    name: Build Firefox production extension
+    name: Build Firefox (${{ matrix.mode }})
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - none
+          - packed-untrusted-x5c
     env:
       BROWSER: firefox
+      BW_ROAMING_ATTESTATION_MODE: ${{ matrix.mode }}
       MANIFEST_VERSION: "3"
       NODE_ENV: production
       NODE_OPTIONS: --max-old-space-size=4608
@@ -71,12 +78,12 @@ jobs:
 
       - name: Build Firefox production extension
         working-directory: clients
-        run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/firefox
+        run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/firefox-${{ matrix.mode }}
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: passkey-profile-firefox-personal
-          path: clients/dist/apps/browser/firefox/
+          name: passkey-profile-firefox-${{ matrix.mode }}
+          path: clients/dist/apps/browser/firefox-${{ matrix.mode }}/
           if-no-files-found: error
           retention-days: 7
