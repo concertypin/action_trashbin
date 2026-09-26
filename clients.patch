@@ -628,7 +628,7 @@ index 7bd662c..5fab162 100644
    try {
      if (encodedCredentialId.startsWith("b64.")) {
 diff --git a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
-index f625f24..5763be8 100644
+index f625f24..ffcb9e8 100644
 --- a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 @@ -1,10 +1,9 @@
@@ -748,7 +748,7 @@ index f625f24..5763be8 100644
          // Unsure how to test public key
          // const publicKey = encAuthData.slice(87);
  
-@@ -408,11 +413,89 @@ describe("FidoAuthenticatorService", () => {
+@@ -408,11 +413,95 @@ describe("FidoAuthenticatorService", () => {
              0xd0, 0x5c, 0x3d, 0xc3,
            ]),
          );
@@ -792,6 +792,12 @@ index f625f24..5763be8 100644
 +        expect(attestationObject.authData.slice(37, 53)).toEqual(UNTRUSTED_ROAMING_AAGUID);
 +        expect(certificate.ca).toBe(false);
 +        expect(certificate.subject).toContain("OU=Authenticator Attestation");
++        expect(certificate.verify(certificate.publicKey)).toBe(true);
++        expect(
++          certificate.raw.indexOf(
++            Buffer.from([0x04, 0x12, 0x04, 0x10, ...UNTRUSTED_ROAMING_AAGUID]),
++          ),
++        ).toBeGreaterThan(-1);
 +        expect(
 +          verifySignature(
 +            "sha256",
@@ -841,7 +847,7 @@ index f625f24..5763be8 100644
        });
      });
  
-@@ -544,6 +627,56 @@ describe("FidoAuthenticatorService", () => {
+@@ -544,6 +633,56 @@ describe("FidoAuthenticatorService", () => {
  
          expect(userInterfaceSession.informCredentialNotFound).toHaveBeenCalled();
        });
@@ -898,7 +904,7 @@ index f625f24..5763be8 100644
      });
  
      describe("vault is missing discoverable credential", () => {
-@@ -772,6 +905,89 @@ describe("FidoAuthenticatorService", () => {
+@@ -772,6 +911,89 @@ describe("FidoAuthenticatorService", () => {
          // expect(isValidSignature).toBe(true);
        });
  
@@ -988,7 +994,7 @@ index f625f24..5763be8 100644
        it("should always generate unique signatures even if the input is the same", async () => {
          const signatures = new Set();
  
-@@ -863,6 +1079,7 @@ function createCipherView(
+@@ -863,6 +1085,7 @@ function createCipherView(
    fido2CredentialView.keyCurve = fido2Credential.keyCurve ?? "P-256";
    fido2CredentialView.discoverable = fido2Credential.discoverable ?? true;
    fido2CredentialView.keyValue =
@@ -1389,7 +1395,7 @@ index ed256c2..5132d1d 100644
    authData: Uint8Array;
    clientDataHash: BufferSource;
 diff --git a/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts b/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
-index f53ad64..6b84c7a 100644
+index f53ad64..62d4169 100644
 --- a/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
 @@ -26,6 +26,12 @@ import {
@@ -1405,7 +1411,7 @@ index f53ad64..6b84c7a 100644
  import * as DomainUtils from "./domain-utils";
  import { Fido2AuthenticatorService } from "./fido2-authenticator.service";
  import { Fido2ClientService } from "./fido2-client.service";
-@@ -95,7 +101,77 @@ describe("FidoAuthenticatorService", () => {
+@@ -95,7 +101,101 @@ describe("FidoAuthenticatorService", () => {
    });
  
    describe("createCredential", () => {
@@ -1480,10 +1486,34 @@ index f53ad64..6b84c7a 100644
 +        );
 +      });
 +
++      it("forwards PRF registration input and returns the authenticator output", async () => {
++        const prfInput = { eval: { first: Fido2Utils.arrayToString(randomBytes(32)) } };
++        const prfOutput = {
++          enabled: true,
++          results: { first: Fido2Utils.arrayToString(randomBytes(32)) },
++        };
++        authenticator.makeCredential.mockResolvedValue({
++          ...createAuthenticatorMakeResult(),
++          extensions: { prf: prfOutput },
++        });
++
++        const result = await client.createCredential(
++          createParams({ extensions: { prf: prfInput } }),
++          windowReference,
++        );
++
++        expect(authenticator.makeCredential).toHaveBeenCalledWith(
++          expect.objectContaining({ extensions: { prf: prfInput } }),
++          windowReference,
++          expect.any(AbortController),
++        );
++        expect(result.extensions.prf).toEqual(prfOutput);
++      });
++
        it.each([
          [true, true],
          [false, false],
-@@ -412,9 +488,11 @@ describe("FidoAuthenticatorService", () => {
+@@ -412,9 +512,11 @@ describe("FidoAuthenticatorService", () => {
        };
      }
  
@@ -1497,7 +1527,35 @@ index f53ad64..6b84c7a 100644
          attestationObject: randomBytes(128),
          authData: randomBytes(64),
          publicKey: randomBytes(64),
-@@ -656,6 +734,93 @@ describe("FidoAuthenticatorService", () => {
+@@ -615,6 +717,27 @@ describe("FidoAuthenticatorService", () => {
+ 
+         await client.assertCredential(params, windowReference);
+       });
++
++      it("forwards PRF assertion input and returns the authenticator output", async () => {
++        const prfInput = { eval: { first: Fido2Utils.arrayToString(randomBytes(32)) } };
++        const prfOutput = {
++          results: { first: Fido2Utils.arrayToString(randomBytes(32)) },
++        };
++        const params = createParams({ extensions: { prf: prfInput } });
++        authenticator.getAssertion.mockResolvedValue({
++          ...createAuthenticatorAssertResult(),
++          extensions: { prf: prfOutput },
++        });
++
++        const result = await client.assertCredential(params, windowReference);
++
++        expect(authenticator.getAssertion).toHaveBeenCalledWith(
++          expect.objectContaining({ extensions: { prf: prfInput } }),
++          windowReference,
++          expect.any(AbortController),
++        );
++        expect(result.extensions.prf).toEqual(prfOutput);
++      });
+     });
+ 
+     describe("fallback for hardware/roaming keys", () => {
+@@ -656,6 +779,93 @@ describe("FidoAuthenticatorService", () => {
  
          expect(authenticator.getAssertion).toHaveBeenCalled();
        });
@@ -1591,6 +1649,14 @@ index f53ad64..6b84c7a 100644
      });
  
      describe("assert discoverable credential", () => {
+@@ -738,6 +948,7 @@ describe("FidoAuthenticatorService", () => {
+         sameOriginWithAncestors: true,
+         fallbackSupported: params.fallbackSupported ?? false,
+         mediation: params.mediation,
++        extensions: params.extensions,
+       };
+     }
+ 
 diff --git a/libs/common/src/platform/services/fido2/fido2-client.service.ts b/libs/common/src/platform/services/fido2/fido2-client.service.ts
 index f1f7318..a732af2 100644
 --- a/libs/common/src/platform/services/fido2/fido2-client.service.ts
