@@ -213,128 +213,8 @@ index 5f373fc..40944fa 100644
      });
  
      it("creates and returns a WebAuthn credential when the navigator API is called to create credentials", async () => {
-diff --git a/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts b/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts
-new file mode 100644
-index 0000000..e93b2bb
---- /dev/null
-+++ b/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts
-@@ -0,0 +1,114 @@
-+import {
-+  AssertCredentialResult,
-+  CreateCredentialResult,
-+} from "@bitwarden/common/platform/abstractions/fido2/fido2-client.service.abstraction";
-+import { Utils } from "@bitwarden/common/platform/misc/utils";
-+import { parseCredentialId } from "@bitwarden/common/platform/services/fido2/credential-id-utils";
-+import {
-+  CredentialProfiles,
-+  generateCredentialId,
-+} from "@bitwarden/common/platform/services/fido2/credential-profile-utils";
-+import { Fido2Utils } from "@bitwarden/common/platform/services/fido2/fido2-utils";
-+import { guidToRawFormat } from "@bitwarden/common/platform/services/fido2/guid-utils";
-+
-+import { setupMockedWebAuthnSupport } from "../../spec/fido2-testing-utils";
-+
-+import { WebauthnUtils } from "./webauthn-utils";
-+
-+beforeAll(() => setupMockedWebAuthnSupport());
-+
-+describe("WebauthnUtils credential profile mapping", () => {
-+  it("preserves an explicit platform-only registration request", () => {
-+    const options = {
-+      publicKey: {
-+        authenticatorSelection: { authenticatorAttachment: "platform" },
-+        challenge: new Uint8Array([1, 2, 3]),
-+        excludeCredentials: [],
-+        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-+        rp: { id: "example.com", name: "Example" },
-+        user: { id: new Uint8Array([4]), name: "user", displayName: "User" },
-+      },
-+    } as unknown as CredentialCreationOptions;
-+
-+    const result = WebauthnUtils.mapCredentialCreationOptions(options, true);
-+
-+    expect(result.authenticatorSelection?.authenticatorAttachment).toBe("platform");
-+  });
-+
-+  it("reports a profile-v1/platform registration with internal transport", () => {
-+    const rawCredentialId = parseCredentialId(generateCredentialId(CredentialProfiles.PlatformV1));
-+    const result = createRegistrationResult(Fido2Utils.arrayToString(rawCredentialId), [
-+      "internal",
-+    ]);
-+
-+    const credential = WebauthnUtils.mapCredentialRegistrationResult(result);
-+
-+    expect(credential.authenticatorAttachment).toBe("platform");
-+    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
-+      "internal",
-+    ]);
-+    expect(credential.toJSON().authenticatorAttachment).toBe("platform");
-+  });
-+
-+  it("reports a profile-v1/roaming registration as cross-platform with usb transport", () => {
-+    const rawCredentialId = parseCredentialId(
-+      generateCredentialId(CredentialProfiles.RoamingSecurityKeyV1),
-+    );
-+    const result = createRegistrationResult(Fido2Utils.arrayToString(rawCredentialId), ["usb"]);
-+
-+    const credential = WebauthnUtils.mapCredentialRegistrationResult(result);
-+
-+    expect(credential.authenticatorAttachment).toBe("cross-platform");
-+    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
-+      "usb",
-+    ]);
-+    expect(credential.toJSON().authenticatorAttachment).toBe("cross-platform");
-+  });
-+
-+  it("keeps a legacy registration platform-attached", () => {
-+    const legacyId = Fido2Utils.arrayToString(guidToRawFormat(Utils.newGuid()));
-+    const credential = WebauthnUtils.mapCredentialRegistrationResult(
-+      createRegistrationResult(legacyId, ["internal", "hybrid"]),
-+    );
-+
-+    expect(credential.authenticatorAttachment).toBe("platform");
-+    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
-+      "internal",
-+      "hybrid",
-+    ]);
-+  });
-+
-+  it.each([
-+    [CredentialProfiles.PlatformV1, "platform"],
-+    [CredentialProfiles.RoamingSecurityKeyV1, "cross-platform"],
-+  ] as const)("reports %s assertions as %s", (profile, attachment) => {
-+    const result: AssertCredentialResult = {
-+      credentialId: Fido2Utils.arrayToString(parseCredentialId(generateCredentialId(profile))),
-+      clientDataJSON: "",
-+      authenticatorData: "",
-+      signature: "",
-+      userHandle: "",
-+    };
-+
-+    const credential = WebauthnUtils.mapCredentialAssertResult(result);
-+
-+    expect(credential.authenticatorAttachment).toBe(attachment);
-+    expect(credential.toJSON().authenticatorAttachment).toBe(attachment);
-+  });
-+});
-+
-+function createRegistrationResult(
-+  credentialId: string,
-+  transports: string[],
-+): CreateCredentialResult {
-+  return {
-+    credentialId,
-+    attestationObject: "",
-+    authData: "",
-+    clientDataJSON: "",
-+    publicKey: "",
-+    publicKeyAlgorithm: -7,
-+    transports,
-+    extensions: {},
-+  };
-+}
 diff --git a/apps/browser/src/autofill/fido2/utils/webauthn-utils.ts b/apps/browser/src/autofill/fido2/utils/webauthn-utils.ts
-index 09ed4d6..633c150 100644
+index 09ed4d6..1c782fa 100644
 --- a/apps/browser/src/autofill/fido2/utils/webauthn-utils.ts
 +++ b/apps/browser/src/autofill/fido2/utils/webauthn-utils.ts
 @@ -2,6 +2,10 @@ import {
@@ -356,7 +236,15 @@ index 09ed4d6..633c150 100644
          requireResidentKey: keyOptions.authenticatorSelection?.requireResidentKey,
          residentKey: keyOptions.authenticatorSelection?.residentKey,
          userVerification: keyOptions.authenticatorSelection?.userVerification,
-@@ -64,7 +69,9 @@ export class WebauthnUtils {
+@@ -37,6 +42,7 @@ export class WebauthnUtils {
+       })),
+       extensions: {
+         credProps: keyOptions.extensions?.credProps,
++        prf: serializePrfInput(keyOptions.extensions?.prf),
+       },
+       pubKeyCredParams: keyOptions.pubKeyCredParams
+         .map((params) => ({
+@@ -64,7 +70,9 @@ export class WebauthnUtils {
        id: result.credentialId,
        rawId: Fido2Utils.stringToArray(result.credentialId).buffer,
        type: "public-key",
@@ -367,17 +255,138 @@ index 09ed4d6..633c150 100644
        response: {
          clientDataJSON: Fido2Utils.stringToArray(result.clientDataJSON).buffer,
          attestationObject: Fido2Utils.stringToArray(result.attestationObject).buffer,
-@@ -139,7 +146,9 @@ export class WebauthnUtils {
+@@ -87,6 +95,7 @@ export class WebauthnUtils {
+       } as AuthenticatorAttestationResponse,
+       getClientExtensionResults: () => ({
+         credProps: result.extensions.credProps,
++        prf: deserializePrfOutput(result.extensions.prf),
+       }),
+       toJSON: () => Fido2Utils.createResultToJson(result),
+     } as PublicKeyCredential;
+@@ -124,6 +133,9 @@ export class WebauthnUtils {
+       timeout: keyOptions.timeout,
+       mediation: options.mediation,
+       fallbackSupported,
++      extensions: {
++        prf: serializePrfInput(keyOptions.extensions?.prf),
++      },
+     };
+   }
+ 
+@@ -138,8 +150,12 @@ export class WebauthnUtils {
+         signature: Fido2Utils.stringToArray(result.signature).buffer,
          userHandle: Fido2Utils.stringToArray(result.userHandle).buffer,
        } as AuthenticatorAssertionResponse,
-       getClientExtensionResults: () => ({}),
+-      getClientExtensionResults: () => ({}),
 -      authenticatorAttachment: "platform",
++      getClientExtensionResults: () => ({
++        prf: deserializePrfOutput(result.extensions.prf),
++      }),
 +      authenticatorAttachment: getCredentialAttachment(
 +        getCredentialProfile(Fido2Utils.stringToArray(result.credentialId)),
 +      ),
        toJSON: () => Fido2Utils.getResultToJson(result),
      } as PublicKeyCredential;
  
+@@ -152,3 +168,58 @@ export class WebauthnUtils {
+     return credential;
+   }
+ }
++
++function serializePrfInput(prf: AuthenticationExtensionsPRFInputs | undefined) {
++  if (prf == null) {
++    return undefined;
++  }
++
++  return {
++    eval: serializePrfValues(prf.eval),
++    evalByCredential:
++      prf.evalByCredential == null
++        ? undefined
++        : Object.fromEntries(
++            Object.entries(prf.evalByCredential).map(([credentialId, values]) => [
++              credentialId,
++              serializePrfValues(values),
++            ]),
++          ),
++  };
++}
++
++function serializePrfValues(values: AuthenticationExtensionsPRFValues | undefined) {
++  if (values == null) {
++    return undefined;
++  }
++
++  return {
++    first: Fido2Utils.arrayToString(Fido2Utils.bufferSourceToUint8Array(values.first)),
++    second:
++      values.second == null
++        ? undefined
++        : Fido2Utils.arrayToString(Fido2Utils.bufferSourceToUint8Array(values.second)),
++  };
++}
++
++function deserializePrfOutput(
++  output: CreateCredentialResult["extensions"]["prf"] | undefined,
++): AuthenticationExtensionsPRFOutputs | undefined {
++  if (output == null) {
++    return undefined;
++  }
++
++  return {
++    enabled: output.enabled,
++    results:
++      output.results == null
++        ? undefined
++        : {
++            first: Fido2Utils.stringToArray(output.results.first).buffer,
++            second:
++              output.results.second == null
++                ? undefined
++                : Fido2Utils.stringToArray(output.results.second).buffer,
++          },
++  };
++}
+diff --git a/apps/browser/src/autofill/globals.d.ts b/apps/browser/src/autofill/globals.d.ts
+index fd7dcd8..af03ff6 100644
+--- a/apps/browser/src/autofill/globals.d.ts
++++ b/apps/browser/src/autofill/globals.d.ts
+@@ -9,6 +9,7 @@ declare global {
+     interface ProcessEnv {
+       BW_INCLUDE_CONTENT_SCRIPT_MEASUREMENTS?: string;
+       BW_DETECT_SYNC_BOUNDARIES?: string;
++      BW_ROAMING_ATTESTATION_MODE?: "none" | "packed-untrusted-x5c";
+     }
+   }
+ }
+diff --git a/apps/browser/src/background/main.background.ts b/apps/browser/src/background/main.background.ts
+index 2489b6f..b8c5a97 100644
+--- a/apps/browser/src/background/main.background.ts
++++ b/apps/browser/src/background/main.background.ts
+@@ -1508,6 +1508,7 @@ export default class MainBackground {
+       this.syncService,
+       this.accountService,
+       this.logService,
++      process.env.BW_ROAMING_ATTESTATION_MODE,
+     );
+     this.fido2ActiveRequestManager = new Fido2ActiveRequestManager();
+     this.fido2ClientService = new Fido2ClientService(
+diff --git a/apps/browser/webpack.base.js b/apps/browser/webpack.base.js
+index 0175c21..e14dc6e 100644
+--- a/apps/browser/webpack.base.js
++++ b/apps/browser/webpack.base.js
+@@ -141,6 +141,11 @@ module.exports.buildConfig = function buildConfig(params) {
+         BW_DETECT_SYNC_BOUNDARIES: JSON.stringify(
+           process.env.BW_DETECT_SYNC_BOUNDARIES === "true" || ENV === "development",
+         ),
++        BW_ROAMING_ATTESTATION_MODE: JSON.stringify(
++          process.env.BW_ROAMING_ATTESTATION_MODE === "packed-untrusted-x5c"
++            ? "packed-untrusted-x5c"
++            : "none",
++        ),
+       },
+     }),
+     new webpack.EnvironmentPlugin({
 diff --git a/apps/web/package.json b/apps/web/package.json
 index 26267e5..5eaba92 100644
 --- a/apps/web/package.json
@@ -392,7 +401,7 @@ index 26267e5..5eaba92 100644
      "build:bit:usqa2": "cross-env NODE_ENV=production ENV=usqa2 npm run build:bit",
      "build:bit:uat": "cross-env NODE_ENV=production ENV=uat npm run build:bit",
 diff --git a/libs/common/src/platform/abstractions/fido2/fido2-authenticator.service.abstraction.ts b/libs/common/src/platform/abstractions/fido2/fido2-authenticator.service.abstraction.ts
-index a4a75d2..1b26bbb 100644
+index a4a75d2..47bf61f 100644
 --- a/libs/common/src/platform/abstractions/fido2/fido2-authenticator.service.abstraction.ts
 +++ b/libs/common/src/platform/abstractions/fido2/fido2-authenticator.service.abstraction.ts
 @@ -58,6 +58,7 @@ export enum Fido2AuthenticatorErrorCode {
@@ -403,7 +412,30 @@ index a4a75d2..1b26bbb 100644
    Constraint = "ConstraintError",
  }
  
-@@ -80,6 +81,8 @@ export interface PublicKeyCredentialDescriptor {
+@@ -73,6 +74,22 @@ export interface PublicKeyCredentialDescriptor {
+   type: "public-key";
+ }
+ 
++/** Base64url encoded PRF inputs and outputs used across extension messaging boundaries. */
++export interface Fido2PrfValues {
++  first: string;
++  second?: string;
++}
++
++export interface Fido2PrfInput {
++  eval?: Fido2PrfValues;
++  evalByCredential?: Record<string, Fido2PrfValues>;
++}
++
++export interface Fido2PrfOutput {
++  enabled?: boolean;
++  results?: Fido2PrfValues;
++}
++
+ /**
+  * Parameters for {@link Fido2AuthenticatorService.makeCredential}
+  *
+@@ -80,6 +97,8 @@ export interface PublicKeyCredentialDescriptor {
   * https://www.w3.org/TR/webauthn-3/#sctn-op-make-cred
   */
  export interface Fido2AuthenticatorMakeCredentialsParams {
@@ -412,11 +444,59 @@ index a4a75d2..1b26bbb 100644
    /** The hash of the serialized client data, provided by the client. */
    hash: BufferSource;
    /** The Relying Party's PublicKeyCredentialRpEntity. */
+@@ -107,9 +126,12 @@ export interface Fido2AuthenticatorMakeCredentialsParams {
+     appidExclude?: string;
+     credProps?: boolean;
+     uvm?: boolean;
++    prf?: Fido2PrfInput;
+   };
+   /** A Boolean value that indicates that individually-identifying attestation MAY be returned by the authenticator. */
+   enterpriseAttestationPossible?: boolean; // Ignored by bitwarden at the moment
++  /** The RP's attestation conveyance preference, used by personal profile attestation modes. */
++  attestationConveyancePreference?: "direct" | "enterprise" | "indirect" | "none";
+   /** The effective resident key requirement for credential creation, a Boolean value determined by the client. Resident is synonymous with discoverable. */
+   requireResidentKey: boolean;
+   requireUserVerification: boolean;
+@@ -125,6 +147,9 @@ export interface Fido2AuthenticatorMakeCredentialResult {
+   authData: Uint8Array<ArrayBuffer>;
+   publicKey: Uint8Array<ArrayBuffer>;
+   publicKeyAlgorithm: number;
++  extensions?: {
++    prf?: Fido2PrfOutput;
++  };
+ }
+ 
+ /**
+@@ -143,7 +168,9 @@ export interface Fido2AuthenticatorGetAssertionParams {
+   requireUserVerification: boolean;
+   /** The constant Boolean value true. It is included here as a pseudo-parameter to simplify applying this abstract authenticator model to implementations that may wish to make a test of user presence optional although WebAuthn does not. */
+   // requireUserPresence: boolean; // Always required
+-  extensions: unknown;
++  extensions?: {
++    prf?: Fido2PrfInput;
++  };
+   /** Forwarded to user interface */
+   fallbackSupported: boolean;
+ 
+@@ -158,4 +185,7 @@ export interface Fido2AuthenticatorGetAssertionResult {
+   };
+   authenticatorData: Uint8Array<ArrayBuffer>;
+   signature: Uint8Array<ArrayBuffer>;
++  extensions?: {
++    prf?: Fido2PrfOutput;
++  };
+ }
 diff --git a/libs/common/src/platform/abstractions/fido2/fido2-client.service.abstraction.ts b/libs/common/src/platform/abstractions/fido2/fido2-client.service.abstraction.ts
-index 83fe96f..dee9a41 100644
+index 83fe96f..5838ccd 100644
 --- a/libs/common/src/platform/abstractions/fido2/fido2-client.service.abstraction.ts
 +++ b/libs/common/src/platform/abstractions/fido2/fido2-client.service.abstraction.ts
-@@ -61,7 +61,7 @@ export interface CreateCredentialParams {
+@@ -1,3 +1,5 @@
++import type { Fido2PrfInput, Fido2PrfOutput } from "./fido2-authenticator.service.abstraction";
++
+ export const UserRequestedFallbackAbortReason = "UserRequestedFallback";
+ 
+ export type UserVerification = "discouraged" | "preferred" | "required";
+@@ -61,7 +63,7 @@ export interface CreateCredentialParams {
    attestation?: "direct" | "enterprise" | "indirect" | "none";
    /** The Relying Party's requirements of the authenticator used in the creation of the credential. */
    authenticatorSelection?: {
@@ -425,6 +505,42 @@ index 83fe96f..dee9a41 100644
      requireResidentKey?: boolean;
      residentKey?: "discouraged" | "preferred" | "required";
      userVerification?: UserVerification;
+@@ -86,6 +88,7 @@ export interface CreateCredentialParams {
+     appidExclude?: string; // Not supported
+     uvm?: boolean; // Not supported
+     credProps?: boolean;
++    prf?: Fido2PrfInput;
+   };
+   /**
+    * This member contains information about the desired properties of the credential to be created.
+@@ -128,6 +131,7 @@ export interface CreateCredentialResult {
+     credProps?: {
+       rk: boolean;
+     };
++    prf?: Fido2PrfOutput;
+   };
+ }
+ 
+@@ -147,6 +151,9 @@ export interface AssertCredentialParams {
+   sameOriginWithAncestors: boolean;
+   mediation?: "silent" | "optional" | "required" | "conditional";
+   fallbackSupported: boolean;
++  extensions?: {
++    prf?: Fido2PrfInput;
++  };
+ }
+ 
+ /**
+@@ -158,6 +165,9 @@ export interface AssertCredentialResult {
+   authenticatorData: string;
+   signature: string;
+   userHandle: string;
++  extensions: {
++    prf?: Fido2PrfOutput;
++  };
+ }
+ 
+ /**
 diff --git a/libs/common/src/platform/services/fido2/credential-id-utils.spec.ts b/libs/common/src/platform/services/fido2/credential-id-utils.spec.ts
 index 76e068a..53ea4a0 100644
 --- a/libs/common/src/platform/services/fido2/credential-id-utils.spec.ts
@@ -511,97 +627,12 @@ index 7bd662c..5fab162 100644
  export function parseCredentialId(encodedCredentialId: string): Uint8Array<ArrayBuffer> {
    try {
      if (encodedCredentialId.startsWith("b64.")) {
-diff --git a/libs/common/src/platform/services/fido2/credential-profile-utils.ts b/libs/common/src/platform/services/fido2/credential-profile-utils.ts
-new file mode 100644
-index 0000000..f482a19
---- /dev/null
-+++ b/libs/common/src/platform/services/fido2/credential-profile-utils.ts
-@@ -0,0 +1,79 @@
-+import { guidToStandardFormat } from "./guid-utils";
-+
-+export const CredentialProfiles = {
-+  Legacy: "legacy",
-+  PlatformV1: "profile-v1/platform",
-+  RoamingSecurityKeyV1: "profile-v1/roaming-security-key",
-+} as const;
-+
-+export type CredentialProfile = (typeof CredentialProfiles)[keyof typeof CredentialProfiles];
-+export type VersionOneCredentialProfile = Exclude<CredentialProfile, "legacy">;
-+export type CredentialAttachment = "platform" | "cross-platform";
-+export type CredentialTransport = "ble" | "hybrid" | "internal" | "nfc" | "usb";
-+
-+/**
-+ * The marker is 24 fixed prefix bits, a 2-bit signature, and a 2-bit profile
-+ * code, leaving 100 random bits in the 16-byte credential ID. Keep the legacy
-+ * roaming code compatible with the initial browser prototype marker (`BWP`,
-+ * high nibble A).
-+ */
-+const PROFILE_PREFIX = new Uint8Array([0x42, 0x57, 0x50]); // ASCII "BWP"
-+const PROFILE_SIGNATURE_MASK = 0xc0;
-+const PROFILE_SIGNATURE = 0x80;
-+const PROFILE_VARIANT_MASK = 0x30;
-+const PROFILE_VARIANTS: Record<VersionOneCredentialProfile, number> = {
-+  [CredentialProfiles.PlatformV1]: 0x10,
-+  [CredentialProfiles.RoamingSecurityKeyV1]: 0x20,
-+};
-+
-+/** Create a marked 16-byte credential ID, represented in Bitwarden's existing UUID field. */
-+export function generateCredentialId(profile: VersionOneCredentialProfile): string {
-+  const rawId = new Uint8Array(16);
-+  crypto.getRandomValues(rawId);
-+  rawId.set(PROFILE_PREFIX, 0);
-+  rawId[3] = (rawId[3] & 0x0f) | PROFILE_SIGNATURE | PROFILE_VARIANTS[profile];
-+
-+  return guidToStandardFormat(rawId);
-+}
-+
-+/** Classify a 16-byte credential ID; all unknown and legacy layouts remain legacy. */
-+export function getCredentialProfile(credentialId: BufferSource): CredentialProfile {
-+  const rawId =
-+    credentialId instanceof ArrayBuffer
-+      ? new Uint8Array(credentialId)
-+      : new Uint8Array(credentialId.buffer, credentialId.byteOffset, credentialId.byteLength);
-+
-+  if (
-+    rawId.byteLength !== 16 ||
-+    rawId[0] !== PROFILE_PREFIX[0] ||
-+    rawId[1] !== PROFILE_PREFIX[1] ||
-+    rawId[2] !== PROFILE_PREFIX[2] ||
-+    (rawId[3] & PROFILE_SIGNATURE_MASK) !== PROFILE_SIGNATURE
-+  ) {
-+    return CredentialProfiles.Legacy;
-+  }
-+
-+  switch (rawId[3] & PROFILE_VARIANT_MASK) {
-+    case PROFILE_VARIANTS[CredentialProfiles.PlatformV1]:
-+      return CredentialProfiles.PlatformV1;
-+    case PROFILE_VARIANTS[CredentialProfiles.RoamingSecurityKeyV1]:
-+      return CredentialProfiles.RoamingSecurityKeyV1;
-+    default:
-+      return CredentialProfiles.Legacy;
-+  }
-+}
-+
-+export function getCredentialAttachment(profile: CredentialProfile): CredentialAttachment {
-+  return profile === CredentialProfiles.RoamingSecurityKeyV1 ? "cross-platform" : "platform";
-+}
-+
-+export function getCredentialTransports(profile: CredentialProfile): CredentialTransport[] {
-+  switch (profile) {
-+    case CredentialProfiles.PlatformV1:
-+      return ["internal"];
-+    case CredentialProfiles.RoamingSecurityKeyV1:
-+      return ["usb"];
-+    case CredentialProfiles.Legacy:
-+      return ["internal", "hybrid"];
-+  }
-+}
 diff --git a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
-index f625f24..43a7694 100644
+index f625f24..5763be8 100644
 --- a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 @@ -1,10 +1,9 @@
-+import { createPublicKey, verify as verifySignature } from "crypto";
++import { createPublicKey, verify as verifySignature, X509Certificate } from "crypto";
  import { TextEncoder } from "util";
  
  import { mock, MockProxy } from "jest-mock-extended";
@@ -612,7 +643,7 @@ index f625f24..43a7694 100644
  import { mockAccountServiceWith, mockAccountInfoWith } from "../../../../spec";
  import { Account } from "../../../auth/abstractions/account.service";
  import { CipherId, UserId } from "../../../types/guid";
-@@ -27,12 +26,16 @@ import {
+@@ -27,13 +26,18 @@ import {
    Fido2UserInterfaceSession,
    NewCredentialParams,
  } from "../../abstractions/fido2/fido2-user-interface.service.abstraction";
@@ -629,9 +660,28 @@ index f625f24..43a7694 100644
 +} from "./credential-profile-utils";
 +import { ANONYMOUS_AAGUID, Fido2AuthenticatorService } from "./fido2-authenticator.service";
  import { Fido2Utils } from "./fido2-utils";
++import { RoamingAttestationModes, UNTRUSTED_ROAMING_AAGUID } from "./roaming-attestation";
  
  type ParentWindowReference = string;
-@@ -73,13 +76,6 @@ describe("FidoAuthenticatorService", () => {
+ 
+@@ -53,6 +57,7 @@ describe("FidoAuthenticatorService", () => {
+   let userInterface!: MockProxy<Fido2UserInterfaceService<ParentWindowReference>>;
+   let userInterfaceSession!: MockProxy<Fido2UserInterfaceSession>;
+   let syncService!: MockProxy<SyncService>;
++  let accountService!: ReturnType<typeof mockAccountServiceWith>;
+   let authenticator!: Fido2AuthenticatorService<ParentWindowReference>;
+   let windowReference!: ParentWindowReference;
+ 
+@@ -64,7 +69,7 @@ describe("FidoAuthenticatorService", () => {
+     syncService = mock<SyncService>({
+       activeUserLastSync$: () => of(new Date()),
+     });
+-    const accountService = mockAccountServiceWith("testId" as UserId);
++    accountService = mockAccountServiceWith("testId" as UserId);
+     authenticator = new Fido2AuthenticatorService(
+       cipherService,
+       userInterface,
+@@ -73,13 +78,6 @@ describe("FidoAuthenticatorService", () => {
      );
      windowReference = Utils.newGuid();
      accountService.activeAccount$ = activeAccountSubject;
@@ -645,7 +695,7 @@ index f625f24..43a7694 100644
    });
  
    describe("makeCredential", () => {
-@@ -350,16 +346,15 @@ describe("FidoAuthenticatorService", () => {
+@@ -350,16 +348,15 @@ describe("FidoAuthenticatorService", () => {
  
      describe(`attestation of new credential`, () => {
        const cipherId = "75280e7e-a72e-4d6c-bf1e-d37238352f9b";
@@ -666,7 +716,7 @@ index f625f24..43a7694 100644
          userInterfaceSession.confirmNewCredential.mockResolvedValue({
            cipherId,
            userVerified: false,
-@@ -376,12 +371,20 @@ describe("FidoAuthenticatorService", () => {
+@@ -376,12 +373,20 @@ describe("FidoAuthenticatorService", () => {
          });
          cipherService.updateWithServer.mockImplementation(async (cipherView, _userId) => {
            cipherView.id = cipherId;
@@ -689,7 +739,7 @@ index f625f24..43a7694 100644
          const result = await authenticator.makeCredential(params, windowReference);
  
          const attestationObject = CBOR.decode(
-@@ -394,7 +397,7 @@ describe("FidoAuthenticatorService", () => {
+@@ -394,7 +399,7 @@ describe("FidoAuthenticatorService", () => {
          const counter = encAuthData.slice(33, 37);
          const aaguid = encAuthData.slice(37, 53);
          const credentialIdLength = encAuthData.slice(53, 55);
@@ -698,7 +748,7 @@ index f625f24..43a7694 100644
          // Unsure how to test public key
          // const publicKey = encAuthData.slice(87);
  
-@@ -408,11 +411,13 @@ describe("FidoAuthenticatorService", () => {
+@@ -408,11 +413,89 @@ describe("FidoAuthenticatorService", () => {
              0xd0, 0x5c, 0x3d, 0xc3,
            ]),
          );
@@ -712,10 +762,86 @@ index f625f24..43a7694 100644
 -        expect(credentialId).toEqual(credentialIdBytes);
 +        expect(authDataCredentialId).toEqual(credentialIdBytes);
 +        expect(getCredentialProfile(credentialIdBytes)).toBe(profile);
++      });
++
++      it("creates verifiable packed attestation with an explicitly untrusted x5c identity", async () => {
++        params.authenticatorAttachment = "cross-platform";
++        params.attestationConveyancePreference = "direct";
++        const packedAuthenticator = new Fido2AuthenticatorService(
++          cipherService,
++          userInterface,
++          syncService,
++          accountService,
++          undefined,
++          RoamingAttestationModes.PackedUntrustedX5c,
++        );
++
++        const result = await packedAuthenticator.makeCredential(params, windowReference);
++        const attestationObject = CBOR.decode(
++          Fido2Utils.bufferSourceToUint8Array(result.attestationObject).buffer,
++        );
++        const certificateBytes = attestationObject.attStmt.x5c[0] as Uint8Array;
++        const certificate = new X509Certificate(Buffer.from(certificateBytes));
++        const signatureBase = Buffer.from([
++          ...attestationObject.authData,
++          ...Fido2Utils.bufferSourceToUint8Array(params.hash),
++        ]);
++
++        expect(attestationObject.fmt).toBe("packed");
++        expect(attestationObject.attStmt.alg).toBe(-7);
++        expect(attestationObject.authData.slice(37, 53)).toEqual(UNTRUSTED_ROAMING_AAGUID);
++        expect(certificate.ca).toBe(false);
++        expect(certificate.subject).toContain("OU=Authenticator Attestation");
++        expect(
++          verifySignature(
++            "sha256",
++            signatureBase,
++            certificate.publicKey,
++            Buffer.from(attestationObject.attStmt.sig),
++          ),
++        ).toBe(true);
++      });
++
++      it("keeps none attestation when the RP does not request conveyed attestation", async () => {
++        params.authenticatorAttachment = "cross-platform";
++        params.attestationConveyancePreference = "none";
++        const packedAuthenticator = new Fido2AuthenticatorService(
++          cipherService,
++          userInterface,
++          syncService,
++          accountService,
++          undefined,
++          RoamingAttestationModes.PackedUntrustedX5c,
++        );
++
++        const result = await packedAuthenticator.makeCredential(params, windowReference);
++        const attestationObject = CBOR.decode(
++          Fido2Utils.bufferSourceToUint8Array(result.attestationObject).buffer,
++        );
++
++        expect(attestationObject.fmt).toBe("none");
++        expect(attestationObject.attStmt).toEqual({});
++        expect(attestationObject.authData.slice(37, 53)).toEqual(ANONYMOUS_AAGUID);
++      });
++
++      it("returns a distinct 32-byte PRF result for each new credential", async () => {
++        const first = Fido2Utils.arrayToString(randomBytes(32));
++        params.extensions = { prf: { eval: { first } } };
++
++        const firstResult = await authenticator.makeCredential(params, windowReference);
++        const secondResult = await authenticator.makeCredential(params, windowReference);
++
++        expect(firstResult.extensions?.prf?.enabled).toBe(true);
++        expect(Fido2Utils.stringToArray(firstResult.extensions?.prf?.results?.first)).toHaveLength(
++          32,
++        );
++        expect(secondResult.extensions?.prf?.results?.first).not.toBe(
++          firstResult.extensions?.prf?.results?.first,
++        );
        });
      });
  
-@@ -544,6 +549,56 @@ describe("FidoAuthenticatorService", () => {
+@@ -544,6 +627,56 @@ describe("FidoAuthenticatorService", () => {
  
          expect(userInterfaceSession.informCredentialNotFound).toHaveBeenCalled();
        });
@@ -772,24 +898,73 @@ index f625f24..43a7694 100644
      });
  
      describe("vault is missing discoverable credential", () => {
-@@ -772,6 +827,40 @@ describe("FidoAuthenticatorService", () => {
+@@ -772,6 +905,89 @@ describe("FidoAuthenticatorService", () => {
          // expect(isValidSignature).toBe(true);
        });
  
++      it("uses the selected credential PRF input and returns a stable 32-byte result", async () => {
++        const defaultInput = Fido2Utils.arrayToString(new Uint8Array(32).fill(1));
++        const selectedInput = Fido2Utils.arrayToString(new Uint8Array(32).fill(2));
++        params.extensions = {
++          prf: {
++            eval: { first: defaultInput },
++            evalByCredential: {
++              [Fido2Utils.arrayToString(parseCredentialId(selectedCredentialId))]: {
++                first: selectedInput,
++              },
++            },
++          },
++        };
++
++        const firstResult = await authenticator.getAssertion(params, windowReference);
++        params.extensions = {
++          prf: {
++            evalByCredential: {
++              [Fido2Utils.arrayToString(parseCredentialId(selectedCredentialId))]: {
++                first: selectedInput,
++              },
++            },
++          },
++        };
++        const secondResult = await authenticator.getAssertion(params, windowReference);
++
++        expect(firstResult.extensions?.prf?.enabled).toBeUndefined();
++        expect(Fido2Utils.stringToArray(firstResult.extensions?.prf?.results?.first)).toHaveLength(
++          32,
++        );
++        expect(secondResult.extensions?.prf?.results?.first).toBe(
++          firstResult.extensions?.prf?.results?.first,
++        );
++      });
++
 +      it.each([CredentialProfiles.PlatformV1, CredentialProfiles.RoamingSecurityKeyV1] as const)(
-+        "keeps BE/BS clear, count zero, and signs the exact authData for %s",
++        "honors %s transport constraints and signs the exact profile authData",
 +        async (profile) => {
 +          const profileCredentialId = generateCredentialId(profile);
 +          const profileCredentialIdBytes = parseCredentialId(profileCredentialId);
 +          credentialIds[0] = profileCredentialId;
 +          ciphers[0].login.fido2Credentials[0].credentialId = profileCredentialId;
 +          selectedCredentialId = profileCredentialId;
-+          params.allowCredentialDescriptorList = credentialIds.map((credentialId) => ({
++          params.allowCredentialDescriptorList = credentialIds.map((credentialId, index) => ({
 +            id: parseCredentialId(credentialId),
++            transports:
++              index === 0
++                ? profile === CredentialProfiles.RoamingSecurityKeyV1
++                  ? ["usb"]
++                  : ["internal"]
++                : ["hybrid"],
 +            type: "public-key",
 +          }));
 +
 +          const result = await authenticator.getAssertion(params, windowReference);
++          if (profile === CredentialProfiles.RoamingSecurityKeyV1) {
++            expect(userInterfaceSession.pickCredential).toHaveBeenCalledWith({
++              cipherIds: [ciphers[0].id],
++              userVerification: false,
++              masterPasswordRepromptRequired: false,
++            });
++          }
++
 +          const flags = result.authenticatorData[32];
 +          const counter = result.authenticatorData.slice(33, 37);
 +          const clientDataHash = Fido2Utils.bufferSourceToUint8Array(params.hash);
@@ -813,7 +988,7 @@ index f625f24..43a7694 100644
        it("should always generate unique signatures even if the input is the same", async () => {
          const signatures = new Set();
  
-@@ -863,6 +952,7 @@ function createCipherView(
+@@ -863,6 +1079,7 @@ function createCipherView(
    fido2CredentialView.keyCurve = fido2Credential.keyCurve ?? "P-256";
    fido2CredentialView.discoverable = fido2Credential.discoverable ?? true;
    fido2CredentialView.keyValue =
@@ -822,7 +997,7 @@ index f625f24..43a7694 100644
      "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgTC-7XDZipXbaVBlnkjlBgO16ZmqBZWejK2iYo6lV0dehRANCAASOcM2WduNq1DriRYN7ZekvZz-bRhA-qNT4v0fbp5suUFJyWmgOQ0bybZcLXHaerK5Ep1JiSrQcewtQNgLtry7f";
  
 diff --git a/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts b/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
-index ed256c2..9768976 100644
+index ed256c2..5132d1d 100644
 --- a/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
 @@ -2,8 +2,6 @@
@@ -834,7 +1009,14 @@ index ed256c2..9768976 100644
  import { AccountService } from "../../../auth/abstractions/account.service";
  import { getUserId } from "../../../auth/services/account.service";
  import { CipherId } from "../../../types/guid";
-@@ -27,11 +25,17 @@ import {
+@@ -22,24 +20,40 @@ import {
+   Fido2AuthenticatorGetAssertionResult,
+   Fido2AuthenticatorMakeCredentialResult,
+   Fido2AuthenticatorMakeCredentialsParams,
++  Fido2PrfOutput,
++  Fido2PrfValues,
+   Fido2AuthenticatorService as Fido2AuthenticatorServiceAbstraction,
+   PublicKeyCredentialDescriptor,
  } from "../../abstractions/fido2/fido2-authenticator.service.abstraction";
  import { Fido2UserInterfaceService } from "../../abstractions/fido2/fido2-user-interface.service.abstraction";
  import { LogService } from "../../abstractions/log.service";
@@ -853,7 +1035,15 @@ index ed256c2..9768976 100644
  import { p1363ToDer } from "./ecdsa-utils";
  import { Fido2Utils } from "./fido2-utils";
  import { guidToStandardFormat } from "./guid-utils";
-@@ -40,6 +44,7 @@ import { guidToStandardFormat } from "./guid-utils";
++import {
++  getUntrustedAttestationCertificate,
++  getUntrustedAttestationPrivateKey,
++  type RoamingAttestationMode,
++  RoamingAttestationModes,
++  UNTRUSTED_ROAMING_AAGUID,
++} from "./roaming-attestation";
+ 
+ // AAGUID: d548826e-79b4-db40-a3d8-11116f7e8349
  export const AAGUID = new Uint8Array([
    0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40, 0xa3, 0xd8, 0x11, 0x11, 0x6f, 0x7e, 0x83, 0x49,
  ]);
@@ -861,7 +1051,15 @@ index ed256c2..9768976 100644
  
  const KeyUsages: KeyUsage[] = ["sign"];
  
-@@ -131,6 +136,10 @@ export class Fido2AuthenticatorService<
+@@ -58,6 +72,7 @@ export class Fido2AuthenticatorService<
+     private syncService: SyncService,
+     private accountService: AccountService,
+     private logService?: LogService,
++    private roamingAttestationMode: RoamingAttestationMode = RoamingAttestationModes.None,
+   ) {}
+ 
+   async makeCredential(
+@@ -131,6 +146,10 @@ export class Fido2AuthenticatorService<
        let userVerified = false;
        let credentialId: string;
        let pubKeyDer: Uint8Array<ArrayBuffer>;
@@ -872,7 +1070,7 @@ index ed256c2..9768976 100644
        const response = await userInterfaceSession.confirmNewCredential({
          credentialName: params.rpEntity.name,
          userName: params.userEntity.name,
-@@ -184,7 +193,7 @@ export class Fido2AuthenticatorService<
+@@ -184,7 +203,7 @@ export class Fido2AuthenticatorService<
            throw new Fido2AuthenticatorError(Fido2AuthenticatorErrorCode.NotAllowed);
          }
  
@@ -881,11 +1079,16 @@ index ed256c2..9768976 100644
          cipher.login.fido2Credentials = [fido2Credential];
          // update username if username is missing
          if (Utils.isNullOrEmpty(cipher.login.username)) {
-@@ -199,13 +208,15 @@ export class Fido2AuthenticatorService<
+@@ -199,20 +218,26 @@ export class Fido2AuthenticatorService<
          throw new Fido2AuthenticatorError(Fido2AuthenticatorErrorCode.Unknown);
        }
  
 +      const rawCredentialId = parseCredentialId(credentialId);
++      const useUntrustedPackedAttestation =
++        credentialProfile === CredentialProfiles.RoamingSecurityKeyV1 &&
++        this.roamingAttestationMode === RoamingAttestationModes.PackedUntrustedX5c &&
++        params.attestationConveyancePreference != null &&
++        params.attestationConveyancePreference !== "none";
        const authData = await generateAuthData({
          rpId: params.rpEntity.id,
 -        credentialId: parseCredentialId(credentialId),
@@ -894,11 +1097,37 @@ index ed256c2..9768976 100644
          userPresence: true,
          userVerification: userVerified,
          keyPair,
-+        credentialProfile: getCredentialProfile(rawCredentialId),
++        credentialProfile,
++        aaguid: useUntrustedPackedAttestation ? UNTRUSTED_ROAMING_AAGUID : undefined,
        });
-       const attestationObject = new Uint8Array(
-         CBOR.encode({
-@@ -267,6 +278,10 @@ export class Fido2AuthenticatorService<
+-      const attestationObject = new Uint8Array(
+-        CBOR.encode({
+-          fmt: "none",
+-          attStmt: {},
+-          authData,
+-        }),
++      const attestationObject = await createAttestationObject(
++        authData,
++        params.hash,
++        useUntrustedPackedAttestation,
+       );
+ 
+       return {
+@@ -221,6 +246,13 @@ export class Fido2AuthenticatorService<
+         authData,
+         publicKey: pubKeyDer,
+         publicKeyAlgorithm: -7,
++        extensions: {
++          prf: await evaluatePrfExtension(
++            params.extensions?.prf?.eval,
++            fido2Credential.keyValue,
++            params.extensions?.prf != null,
++          ),
++        },
+       };
+     } finally {
+       userInterfaceSession.close();
+@@ -267,6 +299,10 @@ export class Fido2AuthenticatorService<
        }
  
        if (cipherOptions.length === 0) {
@@ -909,7 +1138,7 @@ index ed256c2..9768976 100644
          this.logService?.info(
            `[Fido2Authenticator] Aborting because no matching credentials were found in the vault.`,
          );
-@@ -315,8 +330,13 @@ export class Fido2AuthenticatorService<
+@@ -315,8 +351,13 @@ export class Fido2AuthenticatorService<
        try {
          const selectedFido2Credential = selectedCipher.login.fido2Credentials[0];
          const selectedCredentialId = selectedFido2Credential.credentialId;
@@ -924,7 +1153,7 @@ index ed256c2..9768976 100644
            ++selectedFido2Credential.counter;
          }
  
-@@ -325,7 +345,10 @@ export class Fido2AuthenticatorService<
+@@ -325,7 +366,10 @@ export class Fido2AuthenticatorService<
            lastUsedDate: new Date().getTime(),
          };
  
@@ -936,7 +1165,7 @@ index ed256c2..9768976 100644
            const activeUserId = await firstValueFrom(
              this.accountService.activeAccount$.pipe(getUserId),
            );
-@@ -334,10 +357,12 @@ export class Fido2AuthenticatorService<
+@@ -334,10 +378,12 @@ export class Fido2AuthenticatorService<
  
          const authenticatorData = await generateAuthData({
            rpId: selectedFido2Credential.rpId,
@@ -951,7 +1180,28 @@ index ed256c2..9768976 100644
          });
  
          const signature = await generateSignature({
-@@ -377,6 +402,15 @@ export class Fido2AuthenticatorService<
+@@ -346,6 +392,10 @@ export class Fido2AuthenticatorService<
+           privateKey: await getPrivateKeyFromFido2Credential(selectedFido2Credential),
+         });
+ 
++        const prfInput =
++          params.extensions?.prf?.evalByCredential?.[Fido2Utils.arrayToString(rawCredentialId)] ??
++          params.extensions?.prf?.eval;
++
+         return {
+           authenticatorData,
+           selectedCredential: {
+@@ -353,6 +403,9 @@ export class Fido2AuthenticatorService<
+             userHandle: Fido2Utils.stringToArray(selectedFido2Credential.userHandle),
+           },
+           signature,
++          extensions: {
++            prf: await evaluatePrfExtension(prfInput, selectedFido2Credential.keyValue),
++          },
+         };
+       } catch (error) {
+         this.logService?.error(
+@@ -377,6 +430,15 @@ export class Fido2AuthenticatorService<
      } else {
        cipherOptions = await this.findCredentialsByRp(params.rpId);
      }
@@ -967,7 +1217,7 @@ index ed256c2..9768976 100644
      return cipherOptions;
    }
  
-@@ -455,6 +489,29 @@ export class Fido2AuthenticatorService<
+@@ -455,6 +517,29 @@ export class Fido2AuthenticatorService<
      );
    }
  
@@ -997,7 +1247,7 @@ index ed256c2..9768976 100644
    private async findCredentialsByRp(rpId: string): Promise<CipherView[]> {
      const activeUserId = await firstValueFrom(this.accountService.activeAccount$.pipe(getUserId));
      const ciphers = await this.cipherService.getAllDecrypted(activeUserId);
-@@ -483,16 +540,15 @@ async function createKeyPair() {
+@@ -483,16 +568,15 @@ async function createKeyPair() {
  async function createKeyView(
    params: Fido2AuthenticatorMakeCredentialsParams,
    keyValue: CryptoKey,
@@ -1016,15 +1266,16 @@ index ed256c2..9768976 100644
    fido2Credential.keyType = "public-key";
    fido2Credential.keyAlgorithm = "ECDSA";
    fido2Credential.keyCurve = "P-256";
-@@ -532,6 +588,7 @@ interface AuthDataParams {
+@@ -532,6 +616,8 @@ interface AuthDataParams {
    userVerification: boolean;
    counter: number;
    keyPair?: CryptoKeyPair;
 +  credentialProfile: CredentialProfile;
++  aaguid?: Uint8Array<ArrayBuffer>;
  }
  
  async function generateAuthData(params: AuthDataParams) {
-@@ -548,8 +605,8 @@ async function generateAuthData(params: AuthDataParams) {
+@@ -548,8 +634,8 @@ async function generateAuthData(params: AuthDataParams) {
    const flags = authDataFlags({
      extensionData: false,
      attestationData: params.keyPair != undefined,
@@ -1035,19 +1286,110 @@ index ed256c2..9768976 100644
      userVerification: params.userVerification,
      userPresence: params.userPresence,
    });
-@@ -569,7 +626,9 @@ async function generateAuthData(params: AuthDataParams) {
+@@ -569,7 +655,10 @@ async function generateAuthData(params: AuthDataParams) {
      // attestedCredentialData
      const attestedCredentialData: Array<number> = [];
  
 -    attestedCredentialData.push(...AAGUID);
 +    attestedCredentialData.push(
-+      ...(params.credentialProfile === CredentialProfiles.Legacy ? AAGUID : ANONYMOUS_AAGUID),
++      ...(params.aaguid ??
++        (params.credentialProfile === CredentialProfiles.Legacy ? AAGUID : ANONYMOUS_AAGUID)),
 +    );
  
      // credentialIdLength (2 bytes) and credential Id
      const rawId = Fido2Utils.bufferSourceToUint8Array(params.credentialId);
+@@ -598,6 +687,89 @@ async function generateAuthData(params: AuthDataParams) {
+   return new Uint8Array(authData);
+ }
+ 
++async function createAttestationObject(
++  authData: Uint8Array<ArrayBuffer>,
++  clientDataHash: BufferSource,
++  useUntrustedPackedAttestation: boolean,
++): Promise<Uint8Array<ArrayBuffer>> {
++  if (!useUntrustedPackedAttestation) {
++    return new Uint8Array(
++      CBOR.encode({
++        fmt: "none",
++        attStmt: {},
++        authData,
++      }),
++    );
++  }
++
++  const signature = await generateSignature({
++    authData,
++    clientDataHash,
++    privateKey: await getUntrustedAttestationPrivateKey(),
++  });
++
++  return new Uint8Array(
++    CBOR.encode({
++      fmt: "packed",
++      attStmt: {
++        alg: Fido2AlgorithmIdentifier.ES256,
++        sig: signature,
++        x5c: [getUntrustedAttestationCertificate()],
++      },
++      authData,
++    }),
++  );
++}
++
++async function evaluatePrfExtension(
++  input: Fido2PrfValues,
++  credentialPrivateKey: string,
++  includeEnabled = false,
++): Promise<Fido2PrfOutput> {
++  if (input == null && !includeEnabled) {
++    return undefined;
++  }
++
++  return {
++    enabled: includeEnabled ? true : undefined,
++    results:
++      input == null
++        ? undefined
++        : {
++            first: await evaluatePrfValue(input.first, credentialPrivateKey),
++            second:
++              input.second == null
++                ? undefined
++                : await evaluatePrfValue(input.second, credentialPrivateKey),
++          },
++  };
++}
++
++async function evaluatePrfValue(input: string, credentialPrivateKey: string): Promise<string> {
++  const encoder = new TextEncoder();
++  const prfInput = new Uint8Array([
++    ...encoder.encode("WebAuthn PRF"),
++    0,
++    ...Fido2Utils.stringToArray(input),
++  ]);
++  const salt = await crypto.subtle.digest("SHA-256", prfInput);
++  const keyMaterial = new Uint8Array([
++    ...encoder.encode("Bitwarden WebAuthn PRF credential secret"),
++    0,
++    ...Fido2Utils.stringToArray(credentialPrivateKey),
++  ]);
++  const derivedKey = await crypto.subtle.digest("SHA-256", keyMaterial);
++  const hmacKey = await crypto.subtle.importKey(
++    "raw",
++    derivedKey,
++    { name: "HMAC", hash: "SHA-256" },
++    false,
++    ["sign"],
++  );
++  const output = await crypto.subtle.sign("HMAC", hmacKey, salt);
++  return Fido2Utils.arrayToString(new Uint8Array(output));
++}
++
+ interface SignatureParams {
+   authData: Uint8Array;
+   clientDataHash: BufferSource;
 diff --git a/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts b/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
-index f53ad64..c3916dc 100644
+index f53ad64..6b84c7a 100644
 --- a/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-client.service.spec.ts
 @@ -26,6 +26,12 @@ import {
@@ -1063,7 +1405,7 @@ index f53ad64..c3916dc 100644
  import * as DomainUtils from "./domain-utils";
  import { Fido2AuthenticatorService } from "./fido2-authenticator.service";
  import { Fido2ClientService } from "./fido2-client.service";
-@@ -95,6 +101,64 @@ describe("FidoAuthenticatorService", () => {
+@@ -95,7 +101,77 @@ describe("FidoAuthenticatorService", () => {
    });
  
    describe("createCredential", () => {
@@ -1126,9 +1468,22 @@ index f53ad64..c3916dc 100644
 +    });
 +
      describe("Mapping params should handle variations in input formats", () => {
++      it("forwards the RP attestation conveyance preference", async () => {
++        authenticator.makeCredential.mockResolvedValue(createAuthenticatorMakeResult());
++
++        await client.createCredential(createParams({ attestation: "direct" }), windowReference);
++
++        expect(authenticator.makeCredential).toHaveBeenCalledWith(
++          expect.objectContaining({ attestationConveyancePreference: "direct" }),
++          windowReference,
++          expect.any(AbortController),
++        );
++      });
++
        it.each([
          [true, true],
-@@ -412,9 +476,11 @@ describe("FidoAuthenticatorService", () => {
+         [false, false],
+@@ -412,9 +488,11 @@ describe("FidoAuthenticatorService", () => {
        };
      }
  
@@ -1142,7 +1497,7 @@ index f53ad64..c3916dc 100644
          attestationObject: randomBytes(128),
          authData: randomBytes(64),
          publicKey: randomBytes(64),
-@@ -656,6 +722,93 @@ describe("FidoAuthenticatorService", () => {
+@@ -656,6 +734,93 @@ describe("FidoAuthenticatorService", () => {
  
          expect(authenticator.getAssertion).toHaveBeenCalled();
        });
@@ -1237,7 +1592,7 @@ index f53ad64..c3916dc 100644
  
      describe("assert discoverable credential", () => {
 diff --git a/libs/common/src/platform/services/fido2/fido2-client.service.ts b/libs/common/src/platform/services/fido2/fido2-client.service.ts
-index f1f7318..90e2d69 100644
+index f1f7318..a732af2 100644
 --- a/libs/common/src/platform/services/fido2/fido2-client.service.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-client.service.ts
 @@ -37,6 +37,11 @@ import { Utils } from "../../misc/utils";
@@ -1252,15 +1607,17 @@ index f1f7318..90e2d69 100644
  import { isValidRpId } from "./domain-utils";
  import { Fido2Utils } from "./fido2-utils";
  import { guidToRawFormat } from "./guid-utils";
-@@ -268,7 +273,7 @@ export class Fido2ClientService<
+@@ -268,8 +273,8 @@ export class Fido2ClientService<
        clientDataJSON: Fido2Utils.arrayToString(clientDataJSONBytes),
        publicKey: Fido2Utils.arrayToString(makeCredentialResult.publicKey),
        publicKeyAlgorithm: makeCredentialResult.publicKeyAlgorithm,
 -      transports: ["internal", "hybrid"],
+-      extensions: { credProps },
 +      transports: getCredentialTransports(getCredentialProfile(makeCredentialResult.credentialId)),
-       extensions: { credProps },
++      extensions: { credProps, prf: makeCredentialResult.extensions?.prf },
      };
    }
+ 
 @@ -337,6 +342,11 @@ export class Fido2ClientService<
        params.allowedCredentials.every(
          (c) =>
@@ -1288,7 +1645,15 @@ index f1f7318..90e2d69 100644
        if (
          error instanceof Fido2AuthenticatorError &&
          error.errorCode === Fido2AuthenticatorErrorCode.InvalidState
-@@ -540,6 +558,7 @@ function mapToMakeCredentialParams({
+@@ -478,6 +496,7 @@ export class Fido2ClientService<
+           ? Fido2Utils.arrayToString(getAssertionResult.selectedCredential.userHandle)
+           : undefined,
+       signature: Fido2Utils.arrayToString(getAssertionResult.signature),
++      extensions: { prf: getAssertionResult.extensions?.prf },
+     };
+   }
+ 
+@@ -540,9 +559,11 @@ function mapToMakeCredentialParams({
      params.authenticatorSelection?.userVerification === undefined;
  
    return {
@@ -1296,7 +1661,19 @@ index f1f7318..90e2d69 100644
      requireResidentKey,
      requireUserVerification,
      enterpriseAttestationPossible: params.attestation === "enterprise",
-@@ -574,6 +593,7 @@ function mapToGetAssertionParams({
++    attestationConveyancePreference: params.attestation,
+     excludeCredentialDescriptorList,
+     credTypesAndPubKeyAlgs,
+     hash: clientDataHash,
+@@ -556,6 +577,7 @@ function mapToMakeCredentialParams({
+       name: params.user.name,
+     },
+     fallbackSupported: params.fallbackSupported,
++    extensions: { prf: params.extensions?.prf },
+   };
+ }
+ 
+@@ -574,6 +596,7 @@ function mapToGetAssertionParams({
    const allowCredentialDescriptorList: PublicKeyCredentialDescriptor[] =
      params.allowedCredentials.map((c) => ({
        id: Fido2Utils.stringToArray(c.id),
@@ -1304,8 +1681,17 @@ index f1f7318..90e2d69 100644
        type: "public-key",
      }));
  
+@@ -587,7 +610,7 @@ function mapToGetAssertionParams({
+     requireUserVerification,
+     hash: clientDataHash,
+     allowCredentialDescriptorList,
+-    extensions: {},
++    extensions: { prf: params.extensions?.prf },
+     fallbackSupported: params.fallbackSupported,
+     assumeUserPresence,
+   };
 diff --git a/libs/common/src/platform/services/fido2/fido2-utils.ts b/libs/common/src/platform/services/fido2/fido2-utils.ts
-index 92d11b7..333b7f6 100644
+index 92d11b7..64e790a 100644
 --- a/libs/common/src/platform/services/fido2/fido2-utils.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-utils.ts
 @@ -5,6 +5,8 @@ import type {
@@ -1328,17 +1714,344 @@ index 92d11b7..333b7f6 100644
        clientExtensionResults: result.extensions,
        type: "public-key",
      };
-@@ -35,7 +39,9 @@ export class Fido2Utils {
+@@ -35,8 +39,10 @@ export class Fido2Utils {
          signature: result.signature,
          userHandle: result.userHandle,
        },
 -      authenticatorAttachment: "platform",
+-      clientExtensionResults: {},
 +      authenticatorAttachment: getCredentialAttachment(
 +        getCredentialProfile(Fido2Utils.stringToArray(result.credentialId)),
 +      ),
-       clientExtensionResults: {},
++      clientExtensionResults: result.extensions,
        type: "public-key",
      };
+   }
+diff --git a/scripts/test-types.js b/scripts/test-types.js
+index f71f236..d259df7 100644
+--- a/scripts/test-types.js
++++ b/scripts/test-types.js
+@@ -36,4 +36,4 @@ concurrently([
+     name: path.basename(path.dirname(file)),
+     command: `npx tsc --noEmit --project ${file}`,
+   })),
+-]);
++], { maxProcesses: 1 });
+diff --git a/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts b/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts
+new file mode 100644
+index 0000000..c85d187
+--- /dev/null
++++ b/apps/browser/src/autofill/fido2/utils/webauthn-utils.spec.ts
+@@ -0,0 +1,172 @@
++import {
++  AssertCredentialResult,
++  CreateCredentialResult,
++} from "@bitwarden/common/platform/abstractions/fido2/fido2-client.service.abstraction";
++import { Utils } from "@bitwarden/common/platform/misc/utils";
++import { parseCredentialId } from "@bitwarden/common/platform/services/fido2/credential-id-utils";
++import {
++  CredentialProfiles,
++  generateCredentialId,
++} from "@bitwarden/common/platform/services/fido2/credential-profile-utils";
++import { Fido2Utils } from "@bitwarden/common/platform/services/fido2/fido2-utils";
++import { guidToRawFormat } from "@bitwarden/common/platform/services/fido2/guid-utils";
++
++import { setupMockedWebAuthnSupport } from "../../spec/fido2-testing-utils";
++
++import { WebauthnUtils } from "./webauthn-utils";
++
++beforeAll(() => setupMockedWebAuthnSupport());
++
++describe("WebauthnUtils credential profile mapping", () => {
++  it("preserves an explicit platform-only registration request", () => {
++    const options = {
++      publicKey: {
++        authenticatorSelection: { authenticatorAttachment: "platform" },
++        challenge: new Uint8Array([1, 2, 3]),
++        excludeCredentials: [],
++        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
++        rp: { id: "example.com", name: "Example" },
++        user: { id: new Uint8Array([4]), name: "user", displayName: "User" },
++      },
++    } as unknown as CredentialCreationOptions;
++
++    const result = WebauthnUtils.mapCredentialCreationOptions(options, true);
++
++    expect(result.authenticatorSelection?.authenticatorAttachment).toBe("platform");
++  });
++
++  it("serializes PRF registration inputs and restores ArrayBuffer outputs", () => {
++    const first = new Uint8Array([1, 2, 3, 4]);
++    const options = {
++      publicKey: {
++        challenge: new Uint8Array([1]),
++        extensions: { prf: { eval: { first } } },
++        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
++        rp: { id: "example.com", name: "Example" },
++        user: { id: new Uint8Array([2]), name: "user", displayName: "User" },
++      },
++    } as unknown as CredentialCreationOptions;
++
++    const mapped = WebauthnUtils.mapCredentialCreationOptions(options, true);
++    expect(mapped.extensions?.prf?.eval?.first).toBe(Fido2Utils.arrayToString(first));
++
++    const result = createRegistrationResult("AQIDBA", ["usb"]);
++    result.extensions.prf = {
++      enabled: true,
++      results: { first: Fido2Utils.arrayToString(first) },
++    };
++    const credential = WebauthnUtils.mapCredentialRegistrationResult(result);
++    const prf = credential.getClientExtensionResults().prf;
++
++    expect(prf?.enabled).toBe(true);
++    expect(Fido2Utils.bufferSourceToUint8Array(prf?.results?.first)).toEqual(first);
++  });
++
++  it("serializes PRF assertion inputs and restores ArrayBuffer outputs", () => {
++    const first = new Uint8Array([5, 6, 7, 8]);
++    const mapped = WebauthnUtils.mapCredentialRequestOptions(
++      {
++        publicKey: {
++          challenge: new Uint8Array([1]),
++          extensions: { prf: { eval: { first } } },
++        },
++      },
++      true,
++    );
++    expect(mapped.extensions?.prf?.eval?.first).toBe(Fido2Utils.arrayToString(first));
++
++    const result: AssertCredentialResult = {
++      credentialId: "AQIDBA",
++      clientDataJSON: "",
++      authenticatorData: "",
++      signature: "",
++      userHandle: "",
++      extensions: { prf: { results: { first: Fido2Utils.arrayToString(first) } } },
++    };
++    const credential = WebauthnUtils.mapCredentialAssertResult(result);
++
++    expect(
++      Fido2Utils.bufferSourceToUint8Array(
++        credential.getClientExtensionResults().prf?.results?.first,
++      ),
++    ).toEqual(first);
++  });
++
++  it("reports a profile-v1/platform registration with internal transport", () => {
++    const rawCredentialId = parseCredentialId(generateCredentialId(CredentialProfiles.PlatformV1));
++    const result = createRegistrationResult(Fido2Utils.arrayToString(rawCredentialId), [
++      "internal",
++    ]);
++
++    const credential = WebauthnUtils.mapCredentialRegistrationResult(result);
++
++    expect(credential.authenticatorAttachment).toBe("platform");
++    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
++      "internal",
++    ]);
++    expect(credential.toJSON().authenticatorAttachment).toBe("platform");
++  });
++
++  it("reports a profile-v1/roaming registration as cross-platform with usb transport", () => {
++    const rawCredentialId = parseCredentialId(
++      generateCredentialId(CredentialProfiles.RoamingSecurityKeyV1),
++    );
++    const result = createRegistrationResult(Fido2Utils.arrayToString(rawCredentialId), ["usb"]);
++
++    const credential = WebauthnUtils.mapCredentialRegistrationResult(result);
++
++    expect(credential.authenticatorAttachment).toBe("cross-platform");
++    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
++      "usb",
++    ]);
++    expect(credential.toJSON().authenticatorAttachment).toBe("cross-platform");
++  });
++
++  it("keeps a legacy registration platform-attached", () => {
++    const legacyId = Fido2Utils.arrayToString(guidToRawFormat(Utils.newGuid()));
++    const credential = WebauthnUtils.mapCredentialRegistrationResult(
++      createRegistrationResult(legacyId, ["internal", "hybrid"]),
++    );
++
++    expect(credential.authenticatorAttachment).toBe("platform");
++    expect((credential.response as AuthenticatorAttestationResponse).getTransports()).toEqual([
++      "internal",
++      "hybrid",
++    ]);
++  });
++
++  it.each([
++    [CredentialProfiles.PlatformV1, "platform"],
++    [CredentialProfiles.RoamingSecurityKeyV1, "cross-platform"],
++  ] as const)("reports %s assertions as %s", (profile, attachment) => {
++    const result: AssertCredentialResult = {
++      credentialId: Fido2Utils.arrayToString(parseCredentialId(generateCredentialId(profile))),
++      clientDataJSON: "",
++      authenticatorData: "",
++      signature: "",
++      userHandle: "",
++      extensions: {},
++    };
++
++    const credential = WebauthnUtils.mapCredentialAssertResult(result);
++
++    expect(credential.authenticatorAttachment).toBe(attachment);
++    expect(credential.toJSON().authenticatorAttachment).toBe(attachment);
++  });
++});
++
++function createRegistrationResult(
++  credentialId: string,
++  transports: string[],
++): CreateCredentialResult {
++  return {
++    credentialId,
++    attestationObject: "",
++    authData: "",
++    clientDataJSON: "",
++    publicKey: "",
++    publicKeyAlgorithm: -7,
++    transports,
++    extensions: {},
++  };
++}
+diff --git a/libs/common/src/platform/services/fido2/credential-profile-utils.ts b/libs/common/src/platform/services/fido2/credential-profile-utils.ts
+new file mode 100644
+index 0000000..f482a19
+--- /dev/null
++++ b/libs/common/src/platform/services/fido2/credential-profile-utils.ts
+@@ -0,0 +1,79 @@
++import { guidToStandardFormat } from "./guid-utils";
++
++export const CredentialProfiles = {
++  Legacy: "legacy",
++  PlatformV1: "profile-v1/platform",
++  RoamingSecurityKeyV1: "profile-v1/roaming-security-key",
++} as const;
++
++export type CredentialProfile = (typeof CredentialProfiles)[keyof typeof CredentialProfiles];
++export type VersionOneCredentialProfile = Exclude<CredentialProfile, "legacy">;
++export type CredentialAttachment = "platform" | "cross-platform";
++export type CredentialTransport = "ble" | "hybrid" | "internal" | "nfc" | "usb";
++
++/**
++ * The marker is 24 fixed prefix bits, a 2-bit signature, and a 2-bit profile
++ * code, leaving 100 random bits in the 16-byte credential ID. Keep the legacy
++ * roaming code compatible with the initial browser prototype marker (`BWP`,
++ * high nibble A).
++ */
++const PROFILE_PREFIX = new Uint8Array([0x42, 0x57, 0x50]); // ASCII "BWP"
++const PROFILE_SIGNATURE_MASK = 0xc0;
++const PROFILE_SIGNATURE = 0x80;
++const PROFILE_VARIANT_MASK = 0x30;
++const PROFILE_VARIANTS: Record<VersionOneCredentialProfile, number> = {
++  [CredentialProfiles.PlatformV1]: 0x10,
++  [CredentialProfiles.RoamingSecurityKeyV1]: 0x20,
++};
++
++/** Create a marked 16-byte credential ID, represented in Bitwarden's existing UUID field. */
++export function generateCredentialId(profile: VersionOneCredentialProfile): string {
++  const rawId = new Uint8Array(16);
++  crypto.getRandomValues(rawId);
++  rawId.set(PROFILE_PREFIX, 0);
++  rawId[3] = (rawId[3] & 0x0f) | PROFILE_SIGNATURE | PROFILE_VARIANTS[profile];
++
++  return guidToStandardFormat(rawId);
++}
++
++/** Classify a 16-byte credential ID; all unknown and legacy layouts remain legacy. */
++export function getCredentialProfile(credentialId: BufferSource): CredentialProfile {
++  const rawId =
++    credentialId instanceof ArrayBuffer
++      ? new Uint8Array(credentialId)
++      : new Uint8Array(credentialId.buffer, credentialId.byteOffset, credentialId.byteLength);
++
++  if (
++    rawId.byteLength !== 16 ||
++    rawId[0] !== PROFILE_PREFIX[0] ||
++    rawId[1] !== PROFILE_PREFIX[1] ||
++    rawId[2] !== PROFILE_PREFIX[2] ||
++    (rawId[3] & PROFILE_SIGNATURE_MASK) !== PROFILE_SIGNATURE
++  ) {
++    return CredentialProfiles.Legacy;
++  }
++
++  switch (rawId[3] & PROFILE_VARIANT_MASK) {
++    case PROFILE_VARIANTS[CredentialProfiles.PlatformV1]:
++      return CredentialProfiles.PlatformV1;
++    case PROFILE_VARIANTS[CredentialProfiles.RoamingSecurityKeyV1]:
++      return CredentialProfiles.RoamingSecurityKeyV1;
++    default:
++      return CredentialProfiles.Legacy;
++  }
++}
++
++export function getCredentialAttachment(profile: CredentialProfile): CredentialAttachment {
++  return profile === CredentialProfiles.RoamingSecurityKeyV1 ? "cross-platform" : "platform";
++}
++
++export function getCredentialTransports(profile: CredentialProfile): CredentialTransport[] {
++  switch (profile) {
++    case CredentialProfiles.PlatformV1:
++      return ["internal"];
++    case CredentialProfiles.RoamingSecurityKeyV1:
++      return ["usb"];
++    case CredentialProfiles.Legacy:
++      return ["internal", "hybrid"];
++  }
++}
+diff --git a/libs/common/src/platform/services/fido2/roaming-attestation.ts b/libs/common/src/platform/services/fido2/roaming-attestation.ts
+new file mode 100644
+index 0000000..09bb366
+--- /dev/null
++++ b/libs/common/src/platform/services/fido2/roaming-attestation.ts
+@@ -0,0 +1,46 @@
++import { Utils } from "../../misc/utils";
++
++export const RoamingAttestationModes = {
++  None: "none",
++  PackedUntrustedX5c: "packed-untrusted-x5c",
++} as const;
++
++export type RoamingAttestationMode =
++  (typeof RoamingAttestationModes)[keyof typeof RoamingAttestationModes];
++
++/**
++ * Private-use AAGUID for the untrusted personal attestation identity below.
++ * It intentionally does not claim to be a commercial authenticator model.
++ */
++export const UNTRUSTED_ROAMING_AAGUID = new Uint8Array([
++  0x7f, 0x83, 0xe2, 0xc2, 0xf4, 0xc7, 0x4a, 0x3b, 0x8a, 0x6d, 0x1d, 0x0b, 0x5a, 0x9e, 0x6c, 0x41,
++]);
++
++/**
++ * Deliberately untrusted, self-signed packed-attestation identity.
++ *
++ * The certificate satisfies the packed attestation leaf shape (P-256, CA=false,
++ * digitalSignature, Authenticator Attestation OU, matching AAGUID extension), but
++ * has no trusted manufacturer root. Its private key is public source material.
++ * This mode can only help with RPs that validate the attestation signature and
++ * certificate shape without enforcing a trusted attestation chain.
++ */
++const UNTRUSTED_ATTESTATION_PRIVATE_KEY_PKCS8 =
++  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgzZortoxxYFIg7FEHhNQDBUPPk3h0CLQgKkdLPpanqnuhRANCAARDQCr+KB/V8bGrIkiiMeVi+hqSXfo6qQv86nGBDc4nS4jWpziPfVt3KVjuIOhfNTNASEIIWqQ81h9ndIJkwGSv";
++
++const UNTRUSTED_ATTESTATION_CERTIFICATE_DER =
++  "MIICbjCCAhSgAwIBAgIUJsSZraTDG16YemR9WfDXg4NbQgMwCgYIKoZIzj0EAwIwgYQxCzAJBgNVBAYTAktSMRwwGgYDVQQKDBNQYXNza2V5aXplIFBlcnNvbmFsMSIwIAYDVQQLDBlBdXRoZW50aWNhdG9yIEF0dGVzdGF0aW9uMTMwMQYDVQQDDCpQYXNza2V5aXplIFVudHJ1c3RlZCBSb2FtaW5nIEF1dGhlbnRpY2F0b3IwHhcNMjYwOTI2MTQwNzE0WhcNMzYwOTIzMTQwNzE0WjCBhDELMAkGA1UEBhMCS1IxHDAaBgNVBAoME1Bhc3NrZXlpemUgUGVyc29uYWwxIjAgBgNVBAsMGUF1dGhlbnRpY2F0b3IgQXR0ZXN0YXRpb24xMzAxBgNVBAMMKlBhc3NrZXlpemUgVW50cnVzdGVkIFJvYW1pbmcgQXV0aGVudGljYXRvcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABENAKv4oH9XxsasiSKIx5WL6GpJd+jqpC/zqcYENzidLiNanOI99W3cpWO4g6F81M0BIQghapDzWH2d0gmTAZK+jYjBgMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQBId6ZCMYrO+7z8hW7w5yIbTtQJTAhBgsrBgEEAYLlHAEBBAQSBBB/g+LC9MdKO4ptHQtanmxBMAoGCCqGSM49BAMCA0gAMEUCIQCjxZZed9hncRJECIe8IDaMAxaA8u2GMY6UdynefpNoPAIgZfg+DkfQR7+J0Axk62sWlUMYTfuBcfjb/euvuxga9xY=";
++
++export function getUntrustedAttestationCertificate(): Uint8Array<ArrayBuffer> {
++  return Utils.fromB64ToArray(UNTRUSTED_ATTESTATION_CERTIFICATE_DER);
++}
++
++export async function getUntrustedAttestationPrivateKey(): Promise<CryptoKey> {
++  return await crypto.subtle.importKey(
++    "pkcs8",
++    Utils.fromB64ToArray(UNTRUSTED_ATTESTATION_PRIVATE_KEY_PKCS8),
++    { name: "ECDSA", namedCurve: "P-256" },
++    false,
++    ["sign"],
++  );
++}
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
 new file mode 100644
 index 0000000..c799912
@@ -30486,13 +31199,3 @@ index 0000000..002862f
 +  ttf2woff2: false
 +  unrs-resolver: true
 +  utf-8-validate: false
-diff --git a/scripts/test-types.js b/scripts/test-types.js
-index f71f236..d259df7 100644
---- a/scripts/test-types.js
-+++ b/scripts/test-types.js
-@@ -36,4 +36,4 @@ concurrently([
-     name: path.basename(path.dirname(file)),
-     command: `npx tsc --noEmit --project ${file}`,
-   })),
--]);
-+], { maxProcesses: 1 });
