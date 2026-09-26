@@ -348,14 +348,15 @@ index 09ed4d6..1c782fa 100644
 +  };
 +}
 diff --git a/apps/browser/src/autofill/globals.d.ts b/apps/browser/src/autofill/globals.d.ts
-index fd7dcd8..af03ff6 100644
+index fd7dcd8..18151c5 100644
 --- a/apps/browser/src/autofill/globals.d.ts
 +++ b/apps/browser/src/autofill/globals.d.ts
-@@ -9,6 +9,7 @@ declare global {
+@@ -9,6 +9,8 @@ declare global {
      interface ProcessEnv {
        BW_INCLUDE_CONTENT_SCRIPT_MEASUREMENTS?: string;
        BW_DETECT_SYNC_BOUNDARIES?: string;
-+      BW_ROAMING_ATTESTATION_MODE?: "none" | "packed-untrusted-x5c";
++      BW_ROAMING_ATTESTATION_MODE?:
++        "none" | "packed-untrusted-x5c" | "packed-known-security-key-aaguid-untrusted-x5c";
      }
    }
  }
@@ -372,16 +373,18 @@ index 2489b6f..b8c5a97 100644
      this.fido2ActiveRequestManager = new Fido2ActiveRequestManager();
      this.fido2ClientService = new Fido2ClientService(
 diff --git a/apps/browser/webpack.base.js b/apps/browser/webpack.base.js
-index 0175c21..e14dc6e 100644
+index 0175c21..9035573 100644
 --- a/apps/browser/webpack.base.js
 +++ b/apps/browser/webpack.base.js
-@@ -141,6 +141,11 @@ module.exports.buildConfig = function buildConfig(params) {
+@@ -141,6 +141,13 @@ module.exports.buildConfig = function buildConfig(params) {
          BW_DETECT_SYNC_BOUNDARIES: JSON.stringify(
            process.env.BW_DETECT_SYNC_BOUNDARIES === "true" || ENV === "development",
          ),
 +        BW_ROAMING_ATTESTATION_MODE: JSON.stringify(
-+          process.env.BW_ROAMING_ATTESTATION_MODE === "packed-untrusted-x5c"
-+            ? "packed-untrusted-x5c"
++          ["packed-untrusted-x5c", "packed-known-security-key-aaguid-untrusted-x5c"].includes(
++            process.env.BW_ROAMING_ATTESTATION_MODE,
++          )
++            ? process.env.BW_ROAMING_ATTESTATION_MODE
 +            : "none",
 +        ),
        },
@@ -628,7 +631,7 @@ index 7bd662c..5fab162 100644
    try {
      if (encodedCredentialId.startsWith("b64.")) {
 diff --git a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
-index f625f24..ffcb9e8 100644
+index f625f24..dacd96d 100644
 --- a/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-authenticator.service.spec.ts
 @@ -1,10 +1,9 @@
@@ -643,7 +646,7 @@ index f625f24..ffcb9e8 100644
  import { mockAccountServiceWith, mockAccountInfoWith } from "../../../../spec";
  import { Account } from "../../../auth/abstractions/account.service";
  import { CipherId, UserId } from "../../../types/guid";
-@@ -27,13 +26,18 @@ import {
+@@ -27,13 +26,22 @@ import {
    Fido2UserInterfaceSession,
    NewCredentialParams,
  } from "../../abstractions/fido2/fido2-user-interface.service.abstraction";
@@ -660,11 +663,15 @@ index f625f24..ffcb9e8 100644
 +} from "./credential-profile-utils";
 +import { ANONYMOUS_AAGUID, Fido2AuthenticatorService } from "./fido2-authenticator.service";
  import { Fido2Utils } from "./fido2-utils";
-+import { RoamingAttestationModes, UNTRUSTED_ROAMING_AAGUID } from "./roaming-attestation";
++import {
++  KNOWN_SECURITY_KEY_AAGUID,
++  RoamingAttestationModes,
++  UNTRUSTED_ROAMING_AAGUID,
++} from "./roaming-attestation";
  
  type ParentWindowReference = string;
  
-@@ -53,6 +57,7 @@ describe("FidoAuthenticatorService", () => {
+@@ -53,6 +61,7 @@ describe("FidoAuthenticatorService", () => {
    let userInterface!: MockProxy<Fido2UserInterfaceService<ParentWindowReference>>;
    let userInterfaceSession!: MockProxy<Fido2UserInterfaceSession>;
    let syncService!: MockProxy<SyncService>;
@@ -672,7 +679,7 @@ index f625f24..ffcb9e8 100644
    let authenticator!: Fido2AuthenticatorService<ParentWindowReference>;
    let windowReference!: ParentWindowReference;
  
-@@ -64,7 +69,7 @@ describe("FidoAuthenticatorService", () => {
+@@ -64,7 +73,7 @@ describe("FidoAuthenticatorService", () => {
      syncService = mock<SyncService>({
        activeUserLastSync$: () => of(new Date()),
      });
@@ -681,7 +688,7 @@ index f625f24..ffcb9e8 100644
      authenticator = new Fido2AuthenticatorService(
        cipherService,
        userInterface,
-@@ -73,13 +78,6 @@ describe("FidoAuthenticatorService", () => {
+@@ -73,13 +82,6 @@ describe("FidoAuthenticatorService", () => {
      );
      windowReference = Utils.newGuid();
      accountService.activeAccount$ = activeAccountSubject;
@@ -695,7 +702,7 @@ index f625f24..ffcb9e8 100644
    });
  
    describe("makeCredential", () => {
-@@ -350,16 +348,15 @@ describe("FidoAuthenticatorService", () => {
+@@ -350,16 +352,15 @@ describe("FidoAuthenticatorService", () => {
  
      describe(`attestation of new credential`, () => {
        const cipherId = "75280e7e-a72e-4d6c-bf1e-d37238352f9b";
@@ -716,7 +723,7 @@ index f625f24..ffcb9e8 100644
          userInterfaceSession.confirmNewCredential.mockResolvedValue({
            cipherId,
            userVerified: false,
-@@ -376,12 +373,20 @@ describe("FidoAuthenticatorService", () => {
+@@ -376,12 +377,20 @@ describe("FidoAuthenticatorService", () => {
          });
          cipherService.updateWithServer.mockImplementation(async (cipherView, _userId) => {
            cipherView.id = cipherId;
@@ -739,7 +746,7 @@ index f625f24..ffcb9e8 100644
          const result = await authenticator.makeCredential(params, windowReference);
  
          const attestationObject = CBOR.decode(
-@@ -394,7 +399,7 @@ describe("FidoAuthenticatorService", () => {
+@@ -394,7 +403,7 @@ describe("FidoAuthenticatorService", () => {
          const counter = encAuthData.slice(33, 37);
          const aaguid = encAuthData.slice(37, 53);
          const credentialIdLength = encAuthData.slice(53, 55);
@@ -748,7 +755,7 @@ index f625f24..ffcb9e8 100644
          // Unsure how to test public key
          // const publicKey = encAuthData.slice(87);
  
-@@ -408,11 +413,95 @@ describe("FidoAuthenticatorService", () => {
+@@ -408,11 +417,138 @@ describe("FidoAuthenticatorService", () => {
              0xd0, 0x5c, 0x3d, 0xc3,
            ]),
          );
@@ -830,6 +837,49 @@ index f625f24..ffcb9e8 100644
 +        expect(attestationObject.authData.slice(37, 53)).toEqual(ANONYMOUS_AAGUID);
 +      });
 +
++      it("can isolate a known security-key AAGUID from manufacturer-chain trust", async () => {
++        params.authenticatorAttachment = "cross-platform";
++        params.attestationConveyancePreference = "direct";
++        const knownAaguidAuthenticator = new Fido2AuthenticatorService(
++          cipherService,
++          userInterface,
++          syncService,
++          accountService,
++          undefined,
++          RoamingAttestationModes.PackedKnownSecurityKeyAaguidUntrustedX5c,
++        );
++
++        const result = await knownAaguidAuthenticator.makeCredential(params, windowReference);
++        const attestationObject = CBOR.decode(
++          Fido2Utils.bufferSourceToUint8Array(result.attestationObject).buffer,
++        );
++        const certificate = new X509Certificate(
++          Buffer.from(attestationObject.attStmt.x5c[0] as Uint8Array),
++        );
++        const signatureBase = Buffer.from([
++          ...attestationObject.authData,
++          ...Fido2Utils.bufferSourceToUint8Array(params.hash),
++        ]);
++
++        expect(attestationObject.fmt).toBe("packed");
++        expect(attestationObject.authData.slice(37, 53)).toEqual(KNOWN_SECURITY_KEY_AAGUID);
++        expect(
++          certificate.raw.indexOf(
++            Buffer.from([0x04, 0x12, 0x04, 0x10, ...KNOWN_SECURITY_KEY_AAGUID]),
++          ),
++        ).toBeGreaterThan(-1);
++        expect(certificate.issuer).toBe(certificate.subject);
++        expect(certificate.verify(certificate.publicKey)).toBe(true);
++        expect(
++          verifySignature(
++            "sha256",
++            signatureBase,
++            certificate.publicKey,
++            Buffer.from(attestationObject.attStmt.sig),
++          ),
++        ).toBe(true);
++      });
++
 +      it("returns a distinct 32-byte PRF result for each new credential", async () => {
 +        const first = Fido2Utils.arrayToString(randomBytes(32));
 +        params.extensions = { prf: { eval: { first } } };
@@ -847,7 +897,7 @@ index f625f24..ffcb9e8 100644
        });
      });
  
-@@ -544,6 +633,56 @@ describe("FidoAuthenticatorService", () => {
+@@ -544,6 +680,56 @@ describe("FidoAuthenticatorService", () => {
  
          expect(userInterfaceSession.informCredentialNotFound).toHaveBeenCalled();
        });
@@ -904,7 +954,7 @@ index f625f24..ffcb9e8 100644
      });
  
      describe("vault is missing discoverable credential", () => {
-@@ -772,6 +911,89 @@ describe("FidoAuthenticatorService", () => {
+@@ -772,6 +958,89 @@ describe("FidoAuthenticatorService", () => {
          // expect(isValidSignature).toBe(true);
        });
  
@@ -994,7 +1044,7 @@ index f625f24..ffcb9e8 100644
        it("should always generate unique signatures even if the input is the same", async () => {
          const signatures = new Set();
  
-@@ -863,6 +1085,7 @@ function createCipherView(
+@@ -863,6 +1132,7 @@ function createCipherView(
    fido2CredentialView.keyCurve = fido2Credential.keyCurve ?? "P-256";
    fido2CredentialView.discoverable = fido2Credential.discoverable ?? true;
    fido2CredentialView.keyValue =
@@ -1003,7 +1053,7 @@ index f625f24..ffcb9e8 100644
      "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgTC-7XDZipXbaVBlnkjlBgO16ZmqBZWejK2iYo6lV0dehRANCAASOcM2WduNq1DriRYN7ZekvZz-bRhA-qNT4v0fbp5suUFJyWmgOQ0bybZcLXHaerK5Ep1JiSrQcewtQNgLtry7f";
  
 diff --git a/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts b/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
-index ed256c2..5132d1d 100644
+index ed256c2..834467c 100644
 --- a/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
 +++ b/libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
 @@ -2,8 +2,6 @@
@@ -1015,7 +1065,7 @@ index ed256c2..5132d1d 100644
  import { AccountService } from "../../../auth/abstractions/account.service";
  import { getUserId } from "../../../auth/services/account.service";
  import { CipherId } from "../../../types/guid";
-@@ -22,24 +20,40 @@ import {
+@@ -22,24 +20,41 @@ import {
    Fido2AuthenticatorGetAssertionResult,
    Fido2AuthenticatorMakeCredentialResult,
    Fido2AuthenticatorMakeCredentialsParams,
@@ -1044,6 +1094,7 @@ index ed256c2..5132d1d 100644
 +import {
 +  getUntrustedAttestationCertificate,
 +  getUntrustedAttestationPrivateKey,
++  KNOWN_SECURITY_KEY_AAGUID,
 +  type RoamingAttestationMode,
 +  RoamingAttestationModes,
 +  UNTRUSTED_ROAMING_AAGUID,
@@ -1057,7 +1108,7 @@ index ed256c2..5132d1d 100644
  
  const KeyUsages: KeyUsage[] = ["sign"];
  
-@@ -58,6 +72,7 @@ export class Fido2AuthenticatorService<
+@@ -58,6 +73,7 @@ export class Fido2AuthenticatorService<
      private syncService: SyncService,
      private accountService: AccountService,
      private logService?: LogService,
@@ -1065,7 +1116,7 @@ index ed256c2..5132d1d 100644
    ) {}
  
    async makeCredential(
-@@ -131,6 +146,10 @@ export class Fido2AuthenticatorService<
+@@ -131,6 +147,10 @@ export class Fido2AuthenticatorService<
        let userVerified = false;
        let credentialId: string;
        let pubKeyDer: Uint8Array<ArrayBuffer>;
@@ -1076,7 +1127,7 @@ index ed256c2..5132d1d 100644
        const response = await userInterfaceSession.confirmNewCredential({
          credentialName: params.rpEntity.name,
          userName: params.userEntity.name,
-@@ -184,7 +203,7 @@ export class Fido2AuthenticatorService<
+@@ -184,7 +204,7 @@ export class Fido2AuthenticatorService<
            throw new Fido2AuthenticatorError(Fido2AuthenticatorErrorCode.NotAllowed);
          }
  
@@ -1085,16 +1136,21 @@ index ed256c2..5132d1d 100644
          cipher.login.fido2Credentials = [fido2Credential];
          // update username if username is missing
          if (Utils.isNullOrEmpty(cipher.login.username)) {
-@@ -199,20 +218,26 @@ export class Fido2AuthenticatorService<
+@@ -199,20 +219,32 @@ export class Fido2AuthenticatorService<
          throw new Fido2AuthenticatorError(Fido2AuthenticatorErrorCode.Unknown);
        }
  
 +      const rawCredentialId = parseCredentialId(credentialId);
 +      const useUntrustedPackedAttestation =
 +        credentialProfile === CredentialProfiles.RoamingSecurityKeyV1 &&
-+        this.roamingAttestationMode === RoamingAttestationModes.PackedUntrustedX5c &&
++        this.roamingAttestationMode !== RoamingAttestationModes.None &&
 +        params.attestationConveyancePreference != null &&
 +        params.attestationConveyancePreference !== "none";
++      const attestationAaguid =
++        this.roamingAttestationMode ===
++        RoamingAttestationModes.PackedKnownSecurityKeyAaguidUntrustedX5c
++          ? KNOWN_SECURITY_KEY_AAGUID
++          : UNTRUSTED_ROAMING_AAGUID;
        const authData = await generateAuthData({
          rpId: params.rpEntity.id,
 -        credentialId: parseCredentialId(credentialId),
@@ -1104,7 +1160,7 @@ index ed256c2..5132d1d 100644
          userVerification: userVerified,
          keyPair,
 +        credentialProfile,
-+        aaguid: useUntrustedPackedAttestation ? UNTRUSTED_ROAMING_AAGUID : undefined,
++        aaguid: useUntrustedPackedAttestation ? attestationAaguid : undefined,
        });
 -      const attestationObject = new Uint8Array(
 -        CBOR.encode({
@@ -1116,10 +1172,11 @@ index ed256c2..5132d1d 100644
 +        authData,
 +        params.hash,
 +        useUntrustedPackedAttestation,
++        this.roamingAttestationMode,
        );
  
        return {
-@@ -221,6 +246,13 @@ export class Fido2AuthenticatorService<
+@@ -221,6 +253,13 @@ export class Fido2AuthenticatorService<
          authData,
          publicKey: pubKeyDer,
          publicKeyAlgorithm: -7,
@@ -1133,7 +1190,7 @@ index ed256c2..5132d1d 100644
        };
      } finally {
        userInterfaceSession.close();
-@@ -267,6 +299,10 @@ export class Fido2AuthenticatorService<
+@@ -267,6 +306,10 @@ export class Fido2AuthenticatorService<
        }
  
        if (cipherOptions.length === 0) {
@@ -1144,7 +1201,7 @@ index ed256c2..5132d1d 100644
          this.logService?.info(
            `[Fido2Authenticator] Aborting because no matching credentials were found in the vault.`,
          );
-@@ -315,8 +351,13 @@ export class Fido2AuthenticatorService<
+@@ -315,8 +358,13 @@ export class Fido2AuthenticatorService<
        try {
          const selectedFido2Credential = selectedCipher.login.fido2Credentials[0];
          const selectedCredentialId = selectedFido2Credential.credentialId;
@@ -1159,7 +1216,7 @@ index ed256c2..5132d1d 100644
            ++selectedFido2Credential.counter;
          }
  
-@@ -325,7 +366,10 @@ export class Fido2AuthenticatorService<
+@@ -325,7 +373,10 @@ export class Fido2AuthenticatorService<
            lastUsedDate: new Date().getTime(),
          };
  
@@ -1171,7 +1228,7 @@ index ed256c2..5132d1d 100644
            const activeUserId = await firstValueFrom(
              this.accountService.activeAccount$.pipe(getUserId),
            );
-@@ -334,10 +378,12 @@ export class Fido2AuthenticatorService<
+@@ -334,10 +385,12 @@ export class Fido2AuthenticatorService<
  
          const authenticatorData = await generateAuthData({
            rpId: selectedFido2Credential.rpId,
@@ -1186,7 +1243,7 @@ index ed256c2..5132d1d 100644
          });
  
          const signature = await generateSignature({
-@@ -346,6 +392,10 @@ export class Fido2AuthenticatorService<
+@@ -346,6 +399,10 @@ export class Fido2AuthenticatorService<
            privateKey: await getPrivateKeyFromFido2Credential(selectedFido2Credential),
          });
  
@@ -1197,7 +1254,7 @@ index ed256c2..5132d1d 100644
          return {
            authenticatorData,
            selectedCredential: {
-@@ -353,6 +403,9 @@ export class Fido2AuthenticatorService<
+@@ -353,6 +410,9 @@ export class Fido2AuthenticatorService<
              userHandle: Fido2Utils.stringToArray(selectedFido2Credential.userHandle),
            },
            signature,
@@ -1207,7 +1264,7 @@ index ed256c2..5132d1d 100644
          };
        } catch (error) {
          this.logService?.error(
-@@ -377,6 +430,15 @@ export class Fido2AuthenticatorService<
+@@ -377,6 +437,15 @@ export class Fido2AuthenticatorService<
      } else {
        cipherOptions = await this.findCredentialsByRp(params.rpId);
      }
@@ -1223,7 +1280,7 @@ index ed256c2..5132d1d 100644
      return cipherOptions;
    }
  
-@@ -455,6 +517,29 @@ export class Fido2AuthenticatorService<
+@@ -455,6 +524,29 @@ export class Fido2AuthenticatorService<
      );
    }
  
@@ -1253,7 +1310,7 @@ index ed256c2..5132d1d 100644
    private async findCredentialsByRp(rpId: string): Promise<CipherView[]> {
      const activeUserId = await firstValueFrom(this.accountService.activeAccount$.pipe(getUserId));
      const ciphers = await this.cipherService.getAllDecrypted(activeUserId);
-@@ -483,16 +568,15 @@ async function createKeyPair() {
+@@ -483,16 +575,15 @@ async function createKeyPair() {
  async function createKeyView(
    params: Fido2AuthenticatorMakeCredentialsParams,
    keyValue: CryptoKey,
@@ -1272,7 +1329,7 @@ index ed256c2..5132d1d 100644
    fido2Credential.keyType = "public-key";
    fido2Credential.keyAlgorithm = "ECDSA";
    fido2Credential.keyCurve = "P-256";
-@@ -532,6 +616,8 @@ interface AuthDataParams {
+@@ -532,6 +623,8 @@ interface AuthDataParams {
    userVerification: boolean;
    counter: number;
    keyPair?: CryptoKeyPair;
@@ -1281,7 +1338,7 @@ index ed256c2..5132d1d 100644
  }
  
  async function generateAuthData(params: AuthDataParams) {
-@@ -548,8 +634,8 @@ async function generateAuthData(params: AuthDataParams) {
+@@ -548,8 +641,8 @@ async function generateAuthData(params: AuthDataParams) {
    const flags = authDataFlags({
      extensionData: false,
      attestationData: params.keyPair != undefined,
@@ -1292,7 +1349,7 @@ index ed256c2..5132d1d 100644
      userVerification: params.userVerification,
      userPresence: params.userPresence,
    });
-@@ -569,7 +655,10 @@ async function generateAuthData(params: AuthDataParams) {
+@@ -569,7 +662,10 @@ async function generateAuthData(params: AuthDataParams) {
      // attestedCredentialData
      const attestedCredentialData: Array<number> = [];
  
@@ -1304,7 +1361,7 @@ index ed256c2..5132d1d 100644
  
      // credentialIdLength (2 bytes) and credential Id
      const rawId = Fido2Utils.bufferSourceToUint8Array(params.credentialId);
-@@ -598,6 +687,89 @@ async function generateAuthData(params: AuthDataParams) {
+@@ -598,6 +694,90 @@ async function generateAuthData(params: AuthDataParams) {
    return new Uint8Array(authData);
  }
  
@@ -1312,6 +1369,7 @@ index ed256c2..5132d1d 100644
 +  authData: Uint8Array<ArrayBuffer>,
 +  clientDataHash: BufferSource,
 +  useUntrustedPackedAttestation: boolean,
++  roamingAttestationMode: RoamingAttestationMode,
 +): Promise<Uint8Array<ArrayBuffer>> {
 +  if (!useUntrustedPackedAttestation) {
 +    return new Uint8Array(
@@ -1335,7 +1393,7 @@ index ed256c2..5132d1d 100644
 +      attStmt: {
 +        alg: Fido2AlgorithmIdentifier.ES256,
 +        sig: signature,
-+        x5c: [getUntrustedAttestationCertificate()],
++        x5c: [getUntrustedAttestationCertificate(roamingAttestationMode)],
 +      },
 +      authData,
 +    }),
@@ -2068,15 +2126,16 @@ index 0000000..f482a19
 +}
 diff --git a/libs/common/src/platform/services/fido2/roaming-attestation.ts b/libs/common/src/platform/services/fido2/roaming-attestation.ts
 new file mode 100644
-index 0000000..09bb366
+index 0000000..62f8b2c
 --- /dev/null
 +++ b/libs/common/src/platform/services/fido2/roaming-attestation.ts
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,64 @@
 +import { Utils } from "../../misc/utils";
 +
 +export const RoamingAttestationModes = {
 +  None: "none",
 +  PackedUntrustedX5c: "packed-untrusted-x5c",
++  PackedKnownSecurityKeyAaguidUntrustedX5c: "packed-known-security-key-aaguid-untrusted-x5c",
 +} as const;
 +
 +export type RoamingAttestationMode =
@@ -2088,6 +2147,14 @@ index 0000000..09bb366
 + */
 +export const UNTRUSTED_ROAMING_AAGUID = new Uint8Array([
 +  0x7f, 0x83, 0xe2, 0xc2, 0xf4, 0xc7, 0x4a, 0x3b, 0x8a, 0x6d, 0x1d, 0x0b, 0x5a, 0x9e, 0x6c, 0x41,
++]);
++
++/**
++ * Public YubiKey 5 NFC model identifier used only to test whether an RP trusts
++ * an AAGUID lookup without validating the corresponding manufacturer chain.
++ */
++export const KNOWN_SECURITY_KEY_AAGUID = new Uint8Array([
++  0xd7, 0x78, 0x1e, 0x5d, 0xe3, 0x53, 0x46, 0xaa, 0xaf, 0xe2, 0x3c, 0xa4, 0x9f, 0x13, 0x33, 0x2a,
 +]);
 +
 +/**
@@ -2105,8 +2172,17 @@ index 0000000..09bb366
 +const UNTRUSTED_ATTESTATION_CERTIFICATE_DER =
 +  "MIICbjCCAhSgAwIBAgIUJsSZraTDG16YemR9WfDXg4NbQgMwCgYIKoZIzj0EAwIwgYQxCzAJBgNVBAYTAktSMRwwGgYDVQQKDBNQYXNza2V5aXplIFBlcnNvbmFsMSIwIAYDVQQLDBlBdXRoZW50aWNhdG9yIEF0dGVzdGF0aW9uMTMwMQYDVQQDDCpQYXNza2V5aXplIFVudHJ1c3RlZCBSb2FtaW5nIEF1dGhlbnRpY2F0b3IwHhcNMjYwOTI2MTQwNzE0WhcNMzYwOTIzMTQwNzE0WjCBhDELMAkGA1UEBhMCS1IxHDAaBgNVBAoME1Bhc3NrZXlpemUgUGVyc29uYWwxIjAgBgNVBAsMGUF1dGhlbnRpY2F0b3IgQXR0ZXN0YXRpb24xMzAxBgNVBAMMKlBhc3NrZXlpemUgVW50cnVzdGVkIFJvYW1pbmcgQXV0aGVudGljYXRvcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABENAKv4oH9XxsasiSKIx5WL6GpJd+jqpC/zqcYENzidLiNanOI99W3cpWO4g6F81M0BIQghapDzWH2d0gmTAZK+jYjBgMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQBId6ZCMYrO+7z8hW7w5yIbTtQJTAhBgsrBgEEAYLlHAEBBAQSBBB/g+LC9MdKO4ptHQtanmxBMAoGCCqGSM49BAMCA0gAMEUCIQCjxZZed9hncRJECIe8IDaMAxaA8u2GMY6UdynefpNoPAIgZfg+DkfQR7+J0Axk62sWlUMYTfuBcfjb/euvuxga9xY=";
 +
-+export function getUntrustedAttestationCertificate(): Uint8Array<ArrayBuffer> {
-+  return Utils.fromB64ToArray(UNTRUSTED_ATTESTATION_CERTIFICATE_DER);
++const KNOWN_AAGUID_UNTRUSTED_ATTESTATION_CERTIFICATE_DER =
++  "MIICkzCCAjigAwIBAgIRWVVCSUtFWVBBU1NLRVlJWkUwCgYIKoZIzj0EAwIwgYYxCzAJBgNVBAYTAktSMRwwGgYDVQQKDBNQYXNza2V5aXplIFBlcnNvbmFsMSIwIAYDVQQLDBlBdXRoZW50aWNhdG9yIEF0dGVzdGF0aW9uMTUwMwYDVQQDDCxQYXNza2V5aXplIFVudHJ1c3RlZCBLbm93biBBQUdVSUQgRXhwZXJpbWVudDAeFw0yNjA5MjYxNDQ3MTdaFw0zNjA5MjMxNDQ3MTdaMIGGMQswCQYDVQQGEwJLUjEcMBoGA1UECgwTUGFzc2tleWl6ZSBQZXJzb25hbDEiMCAGA1UECwwZQXV0aGVudGljYXRvciBBdHRlc3RhdGlvbjE1MDMGA1UEAwwsUGFzc2tleWl6ZSBVbnRydXN0ZWQgS25vd24gQUFHVUlEIEV4cGVyaW1lbnQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARDQCr+KB/V8bGrIkiiMeVi+hqSXfo6qQv86nGBDc4nS4jWpziPfVt3KVjuIOhfNTNASEIIWqQ81h9ndIJkwGSvo4GEMIGBMB8GA1UdIwQYMBaAFAEh3pkIxis77vPyFbvDnIhtO1AlMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQBId6ZCMYrO+7z8hW7w5yIbTtQJTAhBgsrBgEEAYLlHAEBBAQSBBDXeB5d41NGqq/iPKSfEzMqMAoGCCqGSM49BAMCA0kAMEYCIQDDIASCSSr9ij9JEPbCUN85Auk4YL1lMzCD4zO7lfRkHwIhAJ/btp8+T9SRrxMrIiF4FjVCRKiR6ClaJr7pNguyVWeq";
++
++export function getUntrustedAttestationCertificate(
++  mode: RoamingAttestationMode,
++): Uint8Array<ArrayBuffer> {
++  return Utils.fromB64ToArray(
++    mode === RoamingAttestationModes.PackedKnownSecurityKeyAaguidUntrustedX5c
++      ? KNOWN_AAGUID_UNTRUSTED_ATTESTATION_CERTIFICATE_DER
++      : UNTRUSTED_ATTESTATION_CERTIFICATE_DER,
++  );
 +}
 +
 +export async function getUntrustedAttestationPrivateKey(): Promise<CryptoKey> {
