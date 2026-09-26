@@ -14,9 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode:
-          - none
-          - packed-untrusted-x5c
+        include:
+          - mode: none
+            display_name: Bitwarden Passkeyize (None Attestation)
+            version: 2026.9.26.1
+          - mode: packed-untrusted-x5c
+            display_name: Bitwarden Passkeyize (Packed Attestation)
+            version: 2026.9.26.2
     env:
       BROWSER: firefox
       BW_ROAMING_ATTESTATION_MODE: ${{ matrix.mode }}
@@ -79,6 +83,17 @@ jobs:
       - name: Build Firefox production extension
         working-directory: clients
         run: pnpm --filter @bitwarden/browser exec webpack --output-path=../../dist/apps/browser/firefox-${{ matrix.mode }}
+
+      - name: Stamp personal build identity
+        working-directory: clients
+        env:
+          PERSONAL_BUILD_NAME: ${{ matrix.display_name }}
+          PERSONAL_BUILD_VERSION: ${{ matrix.version }}
+        run: |
+          manifest=dist/apps/browser/firefox-${{ matrix.mode }}/manifest.json
+          jq --arg name "$PERSONAL_BUILD_NAME" --arg version "$PERSONAL_BUILD_VERSION" \
+            '.name = $name | .version = $version' "$manifest" > "$manifest.tmp"
+          mv "$manifest.tmp" "$manifest"
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
